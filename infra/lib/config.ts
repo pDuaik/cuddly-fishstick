@@ -1,8 +1,8 @@
 export interface AppConfig {
   projectName: string;
   stage: string;
-  domainName?: string;
-  hostedZoneName?: string;
-  enableCustomDomain: boolean;
+  domain: string;
+  cloudFrontCertArnUsEast1: string;
+  cognitoDomainCertArn: string;
   enableWaf: boolean;
 }

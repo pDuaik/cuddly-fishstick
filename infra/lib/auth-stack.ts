@@ -6,28 +6,70 @@ import type { AppConfig } from './config';
 export interface AuthStackProps extends cdk.StackProps {
   config: AppConfig;
 
-  // URLs for your app (CloudFront domain or custom domain later)
-  callbackUrls: string[];
-  logoutUrls: string[];
-
-  // Optional: if you want a Cognito custom domain like auth.example.com
-  // NOTE: this is NOT your CloudFront cert. It must be an ACM cert in the SAME region as this stack.
-  cognitoCustomDomain?: string;     // e.g. "auth.example.com"
-  cognitoDomainCertArn?: string;    // ACM cert ARN in same region as user pool
+  /**
+   * REQUIRED:
+   * Cognito custom domain uses: auth.<rootDomain>
+   * This certificate must be in the SAME region as the User Pool (i.e. this stack region).
+   *
+   * Example ARN:
+   * arn:aws:acm:eu-west-2:123456789012:certificate/...
+   */
+  cognitoDomainCertArn: string;
 }
 
+/**
+ * Domain rules (your decision):
+ * - config.domain is the PUBLIC APP domain, either:
+ *     - example.com (if DNS supports apex flattening), OR
+ *     - www.example.com (if DNS does not support apex; user will redirect apex -> www)
+ *
+ * - Cognito Hosted UI will always be: auth.<rootDomain>
+ *   where rootDomain = domain with "www." stripped if present.
+ *
+ * Why this is a good template move:
+ * - One deploy becomes deterministic (no "cloudfront default domain" two-step).
+ * - The user has exactly one domain knob to configure.
+ * - auth.<root> is a predictable, clean convention for OAuth endpoints.
+ *
+ * Tradeoff:
+ * - Users must create a regional ACM cert + DNS record for auth.<root>.
+ *   (Cognito custom domains require a cert in the same region as the user pool.)
+ */
 export class AuthStack extends cdk.Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
+
   public readonly issuerUrl: string;
 
-  // This will be either the default Cognito domain (if set) or your custom domain (if provided)
+  /** Base URL of Hosted UI, e.g. https://auth.example.com */
   public readonly hostedUiBaseUrl: string;
+
+  /** Derived app base url, e.g. https://example.com or https://www.example.com */
+  public readonly appBaseUrl: string;
+
+  /** Derived auth domain, e.g. auth.example.com */
+  public readonly cognitoAuthDomain: string;
 
   constructor(scope: Construct, id: string, props: AuthStackProps) {
     super(scope, id, props);
 
-    const { projectName, stage } = props.config;
+    const { projectName, stage, domain } = props.config;
+
+    // ---------------------------------------------
+    // Domain derivation
+    // ---------------------------------------------
+    // App domain is exactly what user provided (www or apex)
+    this.appBaseUrl = `https://${domain}`;
+
+    // Root domain removes leading "www." if present
+    const rootDomain = domain.toLowerCase().startsWith('www.') ? domain.slice(4) : domain;
+
+    // Cognito custom domain is always auth.<root>
+    this.cognitoAuthDomain = `auth.${rootDomain}`;
+    this.hostedUiBaseUrl = `https://${this.cognitoAuthDomain}`;
+
+    const callbackUrls = [`${this.appBaseUrl}/auth/callback`];
+    const logoutUrls = [`${this.appBaseUrl}/`];
 
     // ---------------------------------------------------------------------
     // User Pool
@@ -45,11 +87,10 @@ export class AuthStack extends cdk.Stack {
         requireLowercase: true,
         requireUppercase: true,
         requireDigits: true,
-        // keep symbols optional unless you really need them
         requireSymbols: false,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: cdk.RemovalPolicy.DESTROY, // POC/dev friendly; flip to RETAIN for prod later
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // dev/POC friendly
     });
 
     // ---------------------------------------------------------------------
@@ -69,8 +110,8 @@ export class AuthStack extends cdk.Stack {
           clientCredentials: false,
         },
         scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
-        callbackUrls: props.callbackUrls,
-        logoutUrls: props.logoutUrls,
+        callbackUrls,
+        logoutUrls,
       },
 
       accessTokenValidity: cdk.Duration.minutes(15),
@@ -79,42 +120,19 @@ export class AuthStack extends cdk.Stack {
     });
 
     // ---------------------------------------------------------------------
-    // Domain for Hosted UI
-    //
-    // Default (recommended for template): Cognito domain prefix
-    // Optional: custom domain (auth.example.com) requires ACM cert in SAME region
+    // Cognito custom domain: auth.<rootDomain>
+    // Requires ACM certificate ARN in same region as this stack.
     // ---------------------------------------------------------------------
-    const wantsCustomDomain = Boolean(props.cognitoCustomDomain);
+    const domainRes = new cognito.CfnUserPoolDomain(this, 'UserPoolDomain', {
+      domain: this.cognitoAuthDomain,
+      userPoolId: this.userPool.userPoolId,
+      customDomainConfig: {
+        certificateArn: props.cognitoDomainCertArn,
+      },
+    });
+    domainRes.node.addDependency(this.userPool);
 
-    if (wantsCustomDomain) {
-      if (!props.cognitoDomainCertArn) {
-        throw new Error('cognitoDomainCertArn is required when cognitoCustomDomain is set.');
-      }
-
-      // L1 because custom domain needs certificate ARN; this is reliable and explicit
-      const domain = new cognito.CfnUserPoolDomain(this, 'UserPoolDomain', {
-        domain: props.cognitoCustomDomain!,
-        userPoolId: this.userPool.userPoolId,
-        customDomainConfig: {
-          certificateArn: props.cognitoDomainCertArn,
-        },
-      });
-
-      domain.node.addDependency(this.userPool);
-
-      this.hostedUiBaseUrl = `https://${props.cognitoCustomDomain}`;
-    } else {
-      // Default Cognito domain (no certificate, no DNS)
-      const prefix = `${projectName}-${stage}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-
-      const domain = this.userPool.addDomain('UserPoolDomain', {
-        cognitoDomain: { domainPrefix: prefix.substring(0, 63) },
-      });
-
-      this.hostedUiBaseUrl = `https://${domain.domainName}`;
-    }
-
-    // Issuer URL (used for token validation if needed)
+    // Issuer URL (useful for verification / docs)
     this.issuerUrl = `https://cognito-idp.${this.region}.amazonaws.com/${this.userPool.userPoolId}`;
 
     // ---------------------------------------------------------------------
@@ -124,6 +142,11 @@ export class AuthStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'UserPoolClientId', { value: this.userPoolClient.userPoolClientId });
     new cdk.CfnOutput(this, 'Issuer', { value: this.issuerUrl });
 
+    new cdk.CfnOutput(this, 'AppBaseUrl', { value: this.appBaseUrl });
+    new cdk.CfnOutput(this, 'CallbackUrl', { value: callbackUrls[0] });
+    new cdk.CfnOutput(this, 'LogoutUrl', { value: logoutUrls[0] });
+
+    new cdk.CfnOutput(this, 'CognitoAuthDomain', { value: this.cognitoAuthDomain });
     new cdk.CfnOutput(this, 'HostedUiBaseUrl', { value: this.hostedUiBaseUrl });
     new cdk.CfnOutput(this, 'AuthorizeEndpoint', { value: `${this.hostedUiBaseUrl}/oauth2/authorize` });
     new cdk.CfnOutput(this, 'TokenEndpoint', { value: `${this.hostedUiBaseUrl}/oauth2/token` });

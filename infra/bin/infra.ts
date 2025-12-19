@@ -7,17 +7,40 @@ import type { AppConfig } from '../lib/config';
 const app = new cdk.App();
 
 function ctx(key: string): string {
-  return (app.node.tryGetContext(key) ?? '').toString();
+  return (app.node.tryGetContext(key) ?? '').toString().trim();
 }
 
+function requireValue(name: string, value?: string): string {
+  const v = (value ?? '').trim();
+  if (!v || v === '__REQUIRED__') {
+    throw new Error(`Missing required config "${name}". Set it in cdk.json context.`);
+  }
+  return v;
+}
+
+// ----------------------------------------------------------------------------
+// Config (context-driven)
+// ----------------------------------------------------------------------------
+// New contract:
+// - domain is REQUIRED (either "example.com" or "www.example.com")
+// - cloudFrontCertArnUsEast1 is REQUIRED (ACM cert in us-east-1 for CloudFront)
+// - cognitoDomainCertArn is REQUIRED (ACM cert in your deploy region for auth.<rootDomain>)
 const config: AppConfig = {
   projectName: ctx('projectName') || 'cuddly-fishstick',
   stage: ctx('stage') || 'dev',
 
-  domainName: process.env.DOMAIN_NAME || ctx('domainName') || undefined,
-  hostedZoneName: process.env.HOSTED_ZONE_NAME || ctx('hostedZoneName') || undefined,
+  domain: requireValue('domain', process.env.DOMAIN || ctx('domain')),
 
-  enableCustomDomain: ctx('enableCustomDomain').toLowerCase() === 'true',
+  cloudFrontCertArnUsEast1: requireValue(
+    'cloudFrontCertArnUsEast1',
+    process.env.CLOUDFRONT_CERT_ARN_US_EAST_1 || ctx('cloudFrontCertArnUsEast1'),
+  ),
+
+  cognitoDomainCertArn: requireValue(
+    'cognitoDomainCertArn',
+    process.env.COGNITO_DOMAIN_CERT_ARN || ctx('cognitoDomainCertArn'),
+  ),
+
   enableWaf: ctx('enableWaf').toLowerCase() === 'true',
 };
 
@@ -36,25 +59,11 @@ const data = new DataStack(app, `${config.projectName}-${config.stage}-data`, {
 
 // -----------------------------------------------------------------------------
 // 2) Auth stack (Cognito)
-// For the template: no custom domain needed; use Cognito default domain.
-// Callback/logout URLs can be updated later once CloudFront exists.
+// - Custom domain is enforced by the stack itself as auth.<rootDomain>
+// - Callback/logout URLs are derived from config.domain inside the stack
 // -----------------------------------------------------------------------------
-const callbackUrls = [
-  // placeholder defaults for template; later replace with CloudFront/custom domain callback
-  'http://localhost:3000/auth/callback',
-];
-
-const logoutUrls = [
-  'http://localhost:3000/',
-];
-
 new AuthStack(app, `${config.projectName}-${config.stage}-auth`, {
   env,
   config,
-  callbackUrls,
-  logoutUrls,
-
-  // Optional later (Cognito custom domain):
-  // cognitoCustomDomain: `auth.${config.domainName}`,
-  // cognitoDomainCertArn: process.env.COGNITO_DOMAIN_CERT_ARN,
+  cognitoDomainCertArn: config.cognitoDomainCertArn,
 });
