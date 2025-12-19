@@ -4,16 +4,9 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Env
-.env
-.env.*
-
 # Logs
 *.log
 
 # Build output
 dist/
 build/
-
-# Env
-!.env.example
