@@ -10,30 +10,18 @@ export interface AuthStackProps extends cdk.StackProps {
    * REQUIRED:
    * Cognito custom domain uses: auth.<rootDomain>
    * This certificate must be in the SAME region as the User Pool (i.e. this stack region).
-   *
-   * Example ARN:
-   * arn:aws:acm:eu-west-2:123456789012:certificate/...
    */
   cognitoDomainCertArn: string;
 }
 
 /**
- * Domain rules (your decision):
+ * Domain rules:
  * - config.domain is the PUBLIC APP domain, either:
  *     - example.com (if DNS supports apex flattening), OR
  *     - www.example.com (if DNS does not support apex; user will redirect apex -> www)
  *
  * - Cognito Hosted UI will always be: auth.<rootDomain>
  *   where rootDomain = domain with "www." stripped if present.
- *
- * Why this is a good template move:
- * - One deploy becomes deterministic (no "cloudfront default domain" two-step).
- * - The user has exactly one domain knob to configure.
- * - auth.<root> is a predictable, clean convention for OAuth endpoints.
- *
- * Tradeoff:
- * - Users must create a regional ACM cert + DNS record for auth.<root>.
- *   (Cognito custom domains require a cert in the same region as the user pool.)
  */
 export class AuthStack extends cdk.Stack {
   public readonly userPool: cognito.UserPool;

@@ -85,7 +85,6 @@ export class ApiStack extends cdk.Stack {
       memorySize: 256,
       bundling: {
         target: 'node22',
-        // keep it clean; add minify later if you want
         sourceMap: true,
       },
     } as const;
