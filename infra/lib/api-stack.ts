@@ -24,10 +24,23 @@ export interface ApiStackProps extends cdk.StackProps {
   cognitoDomain: string;
   cognitoClientId: string;
 
-  cfKeyPairId: string;
-  cfPrivateKeySecretArn: string;
-  cfCookieDomain: string;
+  /**
+   * ✅ NEW SYSTEM (CloudFront Key Groups)
+   *
+   * This is the CloudFront *Public Key ID* (from cloudfront.PublicKey.publicKeyId).
+   * It is the value that must go into the signed cookie field "CloudFront-Key-Pair-Id".
+   *
+   * Naming matters here: it's NOT a "legacy key pair id"; it's the Public Key ID used by Key Groups.
+   */
+  cfPublicKeyId: string;
 
+  /**
+   * Private key used by your auth-callback Lambda to sign cookies.
+   * Store as PEM in Secrets Manager.
+   */
+  cfPrivateKeySecretArn: string;
+
+  cfCookieDomain: string;
   cfCookiePath?: string; // default "/"
   cfCookieTtlSeconds?: number; // default 3600
 
@@ -54,7 +67,8 @@ export class ApiStack extends cdk.Stack {
     const cognitoDomain = requireNonEmpty('cognitoDomain', props.cognitoDomain);
     const cognitoClientId = requireNonEmpty('cognitoClientId', props.cognitoClientId);
 
-    const cfKeyPairId = requireNonEmpty('cfKeyPairId', props.cfKeyPairId);
+    // ✅ Key Groups: Public Key ID (NOT legacy Trusted Signers "key pair id")
+    const cfPublicKeyId = requireNonEmpty('cfPublicKeyId', props.cfPublicKeyId);
     const cfPrivateKeySecretArn = requireNonEmpty('cfPrivateKeySecretArn', props.cfPrivateKeySecretArn);
     const cfCookieDomain = requireNonEmpty('cfCookieDomain', props.cfCookieDomain);
 
@@ -67,8 +81,8 @@ export class ApiStack extends cdk.Stack {
     const cfCookiePath = (props.cfCookiePath ?? '/').trim() || '/';
     const cfCookieTtlSeconds = props.cfCookieTtlSeconds ?? 3600;
 
+    // ✅ Only sign for app paths
     const cfAppResource = `${appBaseUrl}/app/*`;
-    const cfCreatorResource = `${appBaseUrl}/creator/*`;
 
     const cookieNames = {
       OAUTH_STATE_COOKIE_NAME: 'oauth_state',
@@ -129,12 +143,20 @@ export class ApiStack extends cdk.Stack {
 
         ...cookieNames,
 
-        CF_KEY_PAIR_ID: cfKeyPairId,
+        /**
+         * ✅ NEW SYSTEM (Key Groups):
+         * This value is placed into the signed cookie field "CloudFront-Key-Pair-Id".
+         * Despite the cookie field name, this is the CloudFront *Public Key ID*.
+         */
+        CF_PUBLIC_KEY_ID: cfPublicKeyId,
+
         CF_PRIVATE_KEY_SECRET_ARN: cfPrivateKeySecretArn,
         CF_COOKIE_DOMAIN: cfCookieDomain,
         CF_COOKIE_PATH: cfCookiePath,
+
+        // ✅ Only app resource is passed now
         CF_APP_RESOURCE: cfAppResource,
-        CF_CREATOR_RESOURCE: cfCreatorResource,
+
         CF_COOKIE_TTL_SECONDS: String(cfCookieTtlSeconds),
 
         CSRF_COOKIE_NAME: '__Host-csrf',

@@ -37,7 +37,8 @@ const originVerifyHeaderName =
   (settings.originVerifyHeaderName ?? 'X-Origin-Verify').toString().trim() || 'X-Origin-Verify';
 const originVerifyHeaderValue = requireValue('originVerifyHeaderValue', settings.originVerifyHeaderValue);
 
-const cfKeyPairId = requireValue('cfKeyPairId', settings.cfKeyPairId);
+const cfPublicKeyId = requireValue('cfPublicKeyId', settings.cfPublicKeyId);
+
 const cfPrivateKeySecretArn = requireValue('cfPrivateKeySecretArn', settings.cfPrivateKeySecretArn);
 const cfCookieDomain = requireValue('cfCookieDomain', settings.cfCookieDomain);
 
@@ -56,7 +57,7 @@ const env: cdk.Environment = {
 
 const data = new DataStack(app, `${config.projectName}-${config.stage}-data`, {
   env,
-  config
+  config,
 });
 
 const auth = new AuthStack(app, `${config.projectName}-${config.stage}-auth`, {
@@ -72,7 +73,9 @@ new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
   cognitoDomain: auth.cognitoAuthDomain,
   cognitoClientId: auth.userPoolClient.userPoolClientId,
 
-  cfKeyPairId,
+  // ✅ Key Groups (Public Key ID)
+  cfPublicKeyId,
+
   cfPrivateKeySecretArn,
   cfCookieDomain,
   cfCookiePath,

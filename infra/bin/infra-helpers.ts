@@ -12,8 +12,10 @@ export type SettingsFile = {
   cloudFrontCertArnUsEast1: string;
   cognitoDomainCertArn: string;
 
-  cfKeyPairId: string;
+  cfPublicKeyId: string;
+
   cfPrivateKeySecretArn: string;
+
   cfCookieDomain: string;
   cfCookiePath?: string;
   cfCookieTtlSeconds?: number;
@@ -21,14 +23,13 @@ export type SettingsFile = {
   originVerifyHeaderName?: string;
   originVerifyHeaderValue: string;
 
-  cloudFrontPublicKeyPemPath?: string;
-
   extraApiRoutes?: {
     path: string;
     method: string;
     lambdaArn: string;
   }[];
 };
+
 
 export function ctx(app: cdk.App, key: string): string {
   return (app.node.tryGetContext(key) ?? '').toString().trim();
