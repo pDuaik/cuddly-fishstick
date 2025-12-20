@@ -19,16 +19,5 @@
   "originVerifyHeaderName": "X-Origin-Verify",
   "originVerifyHeaderValue": "CHANGE_ME_TO_A_RANDOM_SECRET_STRING",
 
-  "extraApiRoutes": [
-    {
-      "path": "/api/hello",
-      "method": "GET",
-      "lambdaArn": "arn:aws:lambda:eu-west-2:123456789012:function:hello-prod"
-    },
-    {
-      "path": "/api/send-email",
-      "method": "POST",
-      "lambdaArn": "arn:aws:lambda:eu-west-2:123456789012:function:send-email-prod"
-    }
-  ]
+  "extraApiRoutes": []
 }
