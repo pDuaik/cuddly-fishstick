@@ -35,7 +35,12 @@ const config: AppConfig = {
 
 const originVerifyHeaderName =
   (settings.originVerifyHeaderName ?? 'X-Origin-Verify').toString().trim() || 'X-Origin-Verify';
-const originVerifyHeaderValue = requireValue('originVerifyHeaderValue', settings.originVerifyHeaderValue);
+
+// ✅ NEW: SSM parameter ARN (SecureString)
+const originVerifyHeaderValueSecretArn = requireValue(
+  'originVerifyHeaderValueSecretArn',
+  settings.originVerifyHeaderValueSecretArn,
+);
 
 const cfPublicKeyId = requireValue('cfPublicKeyId', settings.cfPublicKeyId);
 
@@ -73,7 +78,6 @@ new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
   cognitoDomain: auth.cognitoAuthDomain,
   cognitoClientId: auth.userPoolClient.userPoolClientId,
 
-  // ✅ Key Groups (Public Key ID)
   cfPublicKeyId,
 
   cfPrivateKeySecretArn,
@@ -82,7 +86,7 @@ new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
   cfCookieTtlSeconds,
 
   originVerifyHeaderName,
-  originVerifyHeaderValue,
+  originVerifyHeaderValueSecretArn,
 
   extraApiRoutes,
 });

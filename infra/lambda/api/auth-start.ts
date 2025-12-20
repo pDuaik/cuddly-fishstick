@@ -2,7 +2,9 @@
 // CommonJS-compatible Lambda export: handler: "auth_start.handler"
 
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { createHash, randomBytes, timingSafeEqual } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
+
+import { enforceOriginVerify, requireEnv, env, buildCookie, json } from './helpers';
 
 function b64url(buf: Buffer): string {
   // Node 22 supports base64url, but we keep it explicit and portable.
@@ -24,17 +26,9 @@ function pkceChallenge(verifier: string): string {
   return b64url(digest);
 }
 
-function getQueryString(event: APIGatewayProxyEventV2): Record<string, string> {
-  // HTTP API v2 provides `queryStringParameters`
-  // which can be undefined.
-  return (event.queryStringParameters ?? {}) as Record<string, string>;
-}
-
 function safeNextPath(raw: string | undefined, fallback: string): string {
-  /**
-   * Allow only relative paths like "/app/page1.html".
-   * Reject anything that could become an absolute URL (//, http:, https:, etc).
-   */
+  // Allow only relative paths like "/app/page1.html".
+  // Reject anything that could become an absolute URL (//, http:, https:, etc).
   if (!raw) return fallback;
 
   const v = raw.trim();
@@ -47,75 +41,26 @@ function safeNextPath(raw: string | undefined, fallback: string): string {
   return v;
 }
 
-function getHeader(event: APIGatewayProxyEventV2, name: string): string {
-  const headers = event.headers ?? {};
-  const target = name.toLowerCase();
-  for (const [k, v] of Object.entries(headers)) {
-    if (k.toLowerCase() === target) return (v ?? '').toString();
-  }
-  return '';
-}
-
-function enforceOriginVerify(event: APIGatewayProxyEventV2): APIGatewayProxyResultV2 | null {
-  const headerName = (process.env.ORIGIN_VERIFY_HEADER_NAME ?? '').trim();
-  const expected = (process.env.ORIGIN_VERIFY_HEADER_VALUE ?? '').trim();
-
-  // Template stance: must be configured and must match (fail closed)
-  if (!headerName || !expected) {
-    return {
-      statusCode: 500,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ message: 'Server misconfigured (origin verify not set)' }),
-    };
-  }
-
-  const actual = getHeader(event, headerName);
-  if (!actual) {
-    return {
-      statusCode: 403,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ message: 'Forbidden (missing origin verify header)' }),
-    };
-  }
-
-  const a = Buffer.from(actual);
-  const b = Buffer.from(expected);
-  const ok = a.length === b.length && timingSafeEqual(a, b);
-
-  if (!ok) {
-    return {
-      statusCode: 403,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ message: 'Forbidden (bad origin verify header)' }),
-    };
-  }
-
-  return null;
-}
-
-function requireEnv(name: string): string {
-  const v = (process.env[name] ?? '').trim();
-  if (!v) throw new Error(`Missing env var: ${name}`);
-  return v;
-}
-
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
-  const deny = enforceOriginVerify(event);
-  if (deny) return deny;
+  const ov = await enforceOriginVerify(event);
+  if (!ov.ok) return json(ov.statusCode, { message: ov.message });
 
   const clientId = requireEnv('COGNITO_CLIENT_ID');
   const cognitoDomain = requireEnv('COGNITO_DOMAIN'); // e.g. auth.example.com
   const redirectUri = requireEnv('REDIRECT_URI'); // https://example.com/auth/callback
 
-  const defaultPostLogin = (process.env.POST_LOGIN_REDIRECT ?? '/app/page1.html').trim() || '/app/page1.html';
+  const defaultPostLogin = env('POST_LOGIN_REDIRECT', '/app/page1.html') || '/app/page1.html';
 
-  const qs = getQueryString(event);
+  const qs = (event.queryStringParameters ?? {}) as Record<string, string | undefined>;
   const nextPath = safeNextPath(qs.next, defaultPostLogin);
 
   // cookie names (keep template-consistent)
-  const stateCookieName = (process.env.OAUTH_STATE_COOKIE_NAME ?? 'oauth_state').trim() || 'oauth_state';
-  const verifierCookieName = (process.env.PKCE_VERIFIER_COOKIE_NAME ?? 'pkce_verifier').trim() || 'pkce_verifier';
-  const postLoginCookieName = (process.env.POST_LOGIN_COOKIE_NAME ?? 'post_login').trim() || 'post_login';
+  const stateCookieName = env('OAUTH_STATE_COOKIE_NAME', 'oauth_state') || 'oauth_state';
+  const verifierCookieName = env('PKCE_VERIFIER_COOKIE_NAME', 'pkce_verifier') || 'pkce_verifier';
+  const postLoginCookieName = env('POST_LOGIN_COOKIE_NAME', 'post_login') || 'post_login';
+
+  // cookie path (must match auth-callback + auth-logout clear path)
+  const authCookiePath = env('AUTH_COOKIE_PATH', '/auth') || '/auth';
 
   // mint state + pkce
   const state = b64url(randomBytes(24));
@@ -127,12 +72,18 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
 
   // NOTE: These are NOT __Host- cookies because they are scoped to Path=/auth
   // (and __Host- requires Path=/)
-  const common = `Path=/auth; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+  const authCookieAttrs = {
+    path: authCookiePath,
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax' as const,
+    maxAge: maxAgeSeconds,
+  };
 
   const cookies = [
-    `${stateCookieName}=${state}; ${common}`,
-    `${verifierCookieName}=${verifier}; ${common}`,
-    `${postLoginCookieName}=${encodeURIComponent(nextPath)}; ${common}`,
+    buildCookie(stateCookieName, state, authCookieAttrs),
+    buildCookie(verifierCookieName, verifier, authCookieAttrs),
+    buildCookie(postLoginCookieName, encodeURIComponent(nextPath), authCookieAttrs),
   ];
 
   const authorizeUrl =

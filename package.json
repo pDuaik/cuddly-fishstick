@@ -1,5 +1,8 @@
 {
   "devDependencies": {
     "esbuild": "^0.27.2"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ssm": "^3.956.0"
   }
 }

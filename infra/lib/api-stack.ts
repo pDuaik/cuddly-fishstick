@@ -24,20 +24,7 @@ export interface ApiStackProps extends cdk.StackProps {
   cognitoDomain: string;
   cognitoClientId: string;
 
-  /**
-   * ✅ NEW SYSTEM (CloudFront Key Groups)
-   *
-   * This is the CloudFront *Public Key ID* (from cloudfront.PublicKey.publicKeyId).
-   * It is the value that must go into the signed cookie field "CloudFront-Key-Pair-Id".
-   *
-   * Naming matters here: it's NOT a "legacy key pair id"; it's the Public Key ID used by Key Groups.
-   */
   cfPublicKeyId: string;
-
-  /**
-   * Private key used by your auth-callback Lambda to sign cookies.
-   * Store as PEM in Secrets Manager.
-   */
   cfPrivateKeySecretArn: string;
 
   cfCookieDomain: string;
@@ -45,7 +32,13 @@ export interface ApiStackProps extends cdk.StackProps {
   cfCookieTtlSeconds?: number; // default 3600
 
   originVerifyHeaderName: string; // default "X-Origin-Verify"
-  originVerifyHeaderValue: string; // REQUIRED non-empty
+
+  /**
+   * ✅ Parameter Store *parameter ARN* (SecureString recommended)
+   * Example:
+   * arn:aws:ssm:eu-west-2:123456789012:parameter/my-origin-verify
+   */
+  originVerifyHeaderValueSecretArn: string;
 
   extraApiRoutes?: ExtraApiRoute[];
 }
@@ -73,7 +66,10 @@ export class ApiStack extends cdk.Stack {
     const cfCookieDomain = requireNonEmpty('cfCookieDomain', props.cfCookieDomain);
 
     const originVerifyHeaderName = (props.originVerifyHeaderName || 'X-Origin-Verify').trim() || 'X-Origin-Verify';
-    const originVerifyHeaderValue = requireNonEmpty('originVerifyHeaderValue', props.originVerifyHeaderValue);
+    const originVerifyHeaderValueSecretArn = requireNonEmpty(
+      'originVerifyHeaderValueSecretArn',
+      props.originVerifyHeaderValueSecretArn,
+    );
 
     const appBaseUrl = `https://${domain}`;
     const redirectUri = `${appBaseUrl}/auth/callback`;
@@ -121,7 +117,7 @@ export class ApiStack extends cdk.Stack {
         ...cookieNames,
 
         ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE: originVerifyHeaderValue,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueSecretArn,
       },
     });
 
@@ -163,11 +159,12 @@ export class ApiStack extends cdk.Stack {
         CSRF_HEADER_NAME: 'X-CSRF-Token',
 
         ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE: originVerifyHeaderValue,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueSecretArn,
       },
     });
     props.sessionsTable.grantReadWriteData(authCallbackFn);
 
+    // CloudFront private key (Secrets Manager)
     authCallbackFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['secretsmanager:GetSecretValue'],
@@ -199,7 +196,7 @@ export class ApiStack extends cdk.Stack {
         CF_COOKIE_PATH: cfCookiePath,
 
         ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE: originVerifyHeaderValue,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueSecretArn,
       },
     });
     props.sessionsTable.grantReadWriteData(authLogoutFn);
@@ -214,7 +211,7 @@ export class ApiStack extends cdk.Stack {
         COOKIE_NAME: 'session',
 
         ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE: originVerifyHeaderValue,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueSecretArn,
       },
     });
     props.sessionsTable.grantReadData(sessionAuthorizerFn);
@@ -226,9 +223,28 @@ export class ApiStack extends cdk.Stack {
       handler: 'handler',
       environment: {
         ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE: originVerifyHeaderValue,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueSecretArn,
       },
     });
+
+    // ---------------------------------------------------------------------
+    // IAM: allow lambdas to read SSM Parameter Store value
+    // We accept a full parameter ARN in settings; easiest is to allow GetParameter on that ARN.
+    // ---------------------------------------------------------------------
+    const allowReadOriginVerifyParam = (fn: lambda.Function) => {
+      fn.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['ssm:GetParameter'],
+          resources: [originVerifyHeaderValueSecretArn],
+        }),
+      );
+    };
+
+    allowReadOriginVerifyParam(authStartFn);
+    allowReadOriginVerifyParam(authCallbackFn);
+    allowReadOriginVerifyParam(authLogoutFn);
+    allowReadOriginVerifyParam(sessionAuthorizerFn);
+    allowReadOriginVerifyParam(meFn);
 
     // ---------------------------------------------------------------------
     // HTTP API + Integrations
@@ -282,10 +298,12 @@ export class ApiStack extends cdk.Stack {
 
       if (!routePath.startsWith('/api/')) throw new Error(`extraApiRoutes path must start with "/api/": ${routePath}`);
       if (routePath.startsWith('/auth/')) throw new Error(`extraApiRoutes cannot register under "/auth/": ${routePath}`);
-      if (!lambdaArn.startsWith('arn:aws:lambda:')) throw new Error(`extraApiRoutes lambdaArn must be a Lambda ARN: ${lambdaArn}`);
+      if (!lambdaArn.startsWith('arn:aws:lambda:'))
+        throw new Error(`extraApiRoutes lambdaArn must be a Lambda ARN: ${lambdaArn}`);
 
       const allowed = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD']);
-      if (!allowed.has(methodRaw)) throw new Error(`extraApiRoutes method not allowed: ${methodRaw} (path: ${routePath})`);
+      if (!allowed.has(methodRaw))
+        throw new Error(`extraApiRoutes method not allowed: ${methodRaw} (path: ${routePath})`);
 
       const fn = lambda.Function.fromFunctionArn(this, `ExtraFn${this.sanitizeId(routePath)}${methodRaw}`, lambdaArn);
       const integration = new apigwv2Integrations.HttpLambdaIntegration(

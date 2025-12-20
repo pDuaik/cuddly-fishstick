@@ -1,3 +1,6 @@
+// lambda/api/auth-callback.ts
+// CommonJS-compatible Lambda export: handler: "auth_callback.handler"
+
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
 import crypto from 'crypto';
@@ -5,21 +8,23 @@ import crypto from 'crypto';
 import {
   enforceOriginVerify,
   requireEnv,
+  env,
   getCookie,
   decodeJwtPayload,
   safePostLoginRedirect,
   resp,
+  buildCookie,
   loadPrivateKeyFromSecrets,
   buildPolicy,
   signPolicyRsaSha1,
   cfB64,
-} from './auth-callback.helpers';
+} from './helpers';
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
 export async function handler(event: any) {
-  const ov = enforceOriginVerify(event);
-  if (!ov.ok) return resp(ov.statusCode, ov.body);
+  const ov = await enforceOriginVerify(event);
+  if (!ov.ok) return resp(ov.statusCode, ov.message);
 
   const qs = event?.queryStringParameters ?? {};
   const code = (qs.code ?? '').toString();
@@ -27,37 +32,33 @@ export async function handler(event: any) {
   if (!code) return resp(400, 'Missing ?code');
 
   const tableName = requireEnv('SESSIONS_TABLE_NAME');
-  const cookieName = (process.env.COOKIE_NAME ?? 'session').trim() || 'session';
 
-  const csrfCookieName = (process.env.CSRF_COOKIE_NAME ?? '__Host-csrf').trim() || '__Host-csrf';
-  const csrfHeaderName = (process.env.CSRF_HEADER_NAME ?? 'X-CSRF-Token').trim() || 'X-CSRF-Token';
+  const cookieName = env('COOKIE_NAME', 'session') || 'session';
+
+  const csrfCookieName = env('CSRF_COOKIE_NAME', '__Host-csrf') || '__Host-csrf';
+  const csrfHeaderName = env('CSRF_HEADER_NAME', 'X-CSRF-Token') || 'X-CSRF-Token';
 
   const cognitoDomain = requireEnv('COGNITO_DOMAIN');
   const clientId = requireEnv('COGNITO_CLIENT_ID');
   const redirectUri = requireEnv('REDIRECT_URI');
 
-  const ttlSeconds = Number.parseInt((process.env.SESSION_TTL_SECONDS ?? '3600').trim(), 10) || 3600;
-  const defaultPostLogin = (process.env.POST_LOGIN_REDIRECT ?? '/app/page1.html').trim() || '/app/page1.html';
+  const ttlSeconds = Number.parseInt(env('SESSION_TTL_SECONDS', '3600'), 10) || 3600;
+  const defaultPostLogin = env('POST_LOGIN_REDIRECT', '/app/page1.html') || '/app/page1.html';
 
-  const stateCookieName = (process.env.OAUTH_STATE_COOKIE_NAME ?? 'oauth_state').trim() || 'oauth_state';
-  const pkceCookieName = (process.env.PKCE_VERIFIER_COOKIE_NAME ?? 'pkce_verifier').trim() || 'pkce_verifier';
-  const postLoginCookieName = (process.env.POST_LOGIN_COOKIE_NAME ?? 'post_login').trim() || 'post_login';
+  const stateCookieName = env('OAUTH_STATE_COOKIE_NAME', 'oauth_state') || 'oauth_state';
+  const pkceCookieName = env('PKCE_VERIFIER_COOKIE_NAME', 'pkce_verifier') || 'pkce_verifier';
+  const postLoginCookieName = env('POST_LOGIN_COOKIE_NAME', 'post_login') || 'post_login';
 
-  const authCookiePath = (process.env.AUTH_COOKIE_PATH ?? '/auth').trim() || '/auth';
+  const authCookiePath = env('AUTH_COOKIE_PATH', '/auth') || '/auth';
 
-  /**
-   * ✅ NEW SYSTEM (Key Groups)
-   * CF_PUBLIC_KEY_ID is the CloudFront Public Key ID (from cloudfront.PublicKey.publicKeyId).
-   * It is placed into the cookie field "CloudFront-Key-Pair-Id".
-   */
-  const cfPublicKeyId = (process.env.CF_PUBLIC_KEY_ID ?? '').trim();
-  const cfPrivateKeySecretArn = (process.env.CF_PRIVATE_KEY_SECRET_ARN ?? '').trim();
-  const cfCookieDomain = (process.env.CF_COOKIE_DOMAIN ?? '').trim();
-  const cfCookiePath = (process.env.CF_COOKIE_PATH ?? '/').trim() || '/';
-  const cfCookieTtlSeconds =
-    Number.parseInt((process.env.CF_COOKIE_TTL_SECONDS ?? String(ttlSeconds)).trim(), 10) || ttlSeconds;
+  // CloudFront signed cookies (Key Groups)
+  const cfPublicKeyId = env('CF_PUBLIC_KEY_ID', '');
+  const cfPrivateKeySecretArn = env('CF_PRIVATE_KEY_SECRET_ARN', '');
+  const cfCookieDomain = env('CF_COOKIE_DOMAIN', '');
+  const cfCookiePath = env('CF_COOKIE_PATH', '/') || '/';
+  const cfCookieTtlSeconds = Number.parseInt(env('CF_COOKIE_TTL_SECONDS', String(ttlSeconds)), 10) || ttlSeconds;
 
-  // ✅ required: we only sign for /app/*
+  // required: sign only for /app/*
   const cfAppResource = requireEnv('CF_APP_RESOURCE');
 
   const appHost = (() => {
@@ -68,29 +69,31 @@ export async function handler(event: any) {
     }
   })();
 
-  const clearTempCommon = `Path=${authCookiePath}; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+  const clearTempAttrs = {
+    path: authCookiePath,
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax' as const,
+    maxAge: 0,
+  };
+
+  const clearTempCookies = (): string[] => [
+    buildCookie(stateCookieName, '', clearTempAttrs),
+    buildCookie(pkceCookieName, '', clearTempAttrs),
+    buildCookie(postLoginCookieName, '', clearTempAttrs),
+  ];
 
   const expectedState = getCookie(event, stateCookieName);
   const codeVerifier = getCookie(event, pkceCookieName);
 
   if (!expectedState || !codeVerifier) {
     return resp(400, 'Missing login cookies (state/pkce). Use /auth/start to begin login.', {
-      cookies: [
-        `${stateCookieName}=; ${clearTempCommon}`,
-        `${pkceCookieName}=; ${clearTempCommon}`,
-        `${postLoginCookieName}=; ${clearTempCommon}`,
-      ],
+      cookies: clearTempCookies(),
     });
   }
 
   if (returnedState !== expectedState) {
-    return resp(400, 'State mismatch', {
-      cookies: [
-        `${stateCookieName}=; ${clearTempCommon}`,
-        `${pkceCookieName}=; ${clearTempCommon}`,
-        `${postLoginCookieName}=; ${clearTempCommon}`,
-      ],
-    });
+    return resp(400, 'State mismatch', { cookies: clearTempCookies() });
   }
 
   const rawPostLogin = getCookie(event, postLoginCookieName) || '';
@@ -119,11 +122,7 @@ export async function handler(event: any) {
     if (!r.ok) throw new Error(`HTTP ${r.status}: ${text}`);
   } catch (e: any) {
     return resp(502, `Token exchange failed: ${e?.message ?? String(e)}`, {
-      cookies: [
-        `${stateCookieName}=; ${clearTempCommon}`,
-        `${pkceCookieName}=; ${clearTempCommon}`,
-        `${postLoginCookieName}=; ${clearTempCommon}`,
-      ],
+      cookies: clearTempCookies(),
     });
   }
 
@@ -133,11 +132,7 @@ export async function handler(event: any) {
 
   if (!idToken || !accessToken) {
     return resp(502, `Token response missing tokens: ${JSON.stringify(payload)}`, {
-      cookies: [
-        `${stateCookieName}=; ${clearTempCommon}`,
-        `${pkceCookieName}=; ${clearTempCommon}`,
-        `${postLoginCookieName}=; ${clearTempCommon}`,
-      ],
+      cookies: clearTempCookies(),
     });
   }
 
@@ -165,17 +160,33 @@ export async function handler(event: any) {
 
   const cookiesOut: string[] = [];
 
-  cookiesOut.push(`${cookieName}=${sessionId}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${ttlSeconds}`);
+  // 1) App session cookie (HttpOnly)
+  cookiesOut.push(
+    buildCookie(cookieName, sessionId, {
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Lax',
+      maxAge: ttlSeconds,
+    }),
+  );
 
+  // 2) CSRF cookie (NOT HttpOnly). "__Host-" implies Path=/ and no Domain.
   const csrfToken = crypto.randomBytes(32).toString('base64url');
-  cookiesOut.push(`${csrfCookieName}=${csrfToken}; Path=/; Secure; SameSite=Lax; Max-Age=${ttlSeconds}`);
-  void csrfHeaderName;
+  cookiesOut.push(
+    buildCookie(csrfCookieName, csrfToken, {
+      path: '/',
+      httpOnly: false,
+      secure: true,
+      sameSite: 'Lax',
+      maxAge: ttlSeconds,
+    }),
+  );
+  void csrfHeaderName; // reserved for future CSRF header checks on write endpoints
 
-  // ✅ strict: must be configured, no fallback behavior
+  // 3) CloudFront signed cookies (strict: must be configured)
   if (!cfPublicKeyId || !cfPrivateKeySecretArn) {
-    cookiesOut.push(`${stateCookieName}=; ${clearTempCommon}`);
-    cookiesOut.push(`${pkceCookieName}=; ${clearTempCommon}`);
-    cookiesOut.push(`${postLoginCookieName}=; ${clearTempCommon}`);
+    cookiesOut.push(...clearTempCookies());
     return resp(500, 'Server misconfigured: CloudFront Key Group signing not configured', { cookies: cookiesOut });
   }
 
@@ -189,23 +200,26 @@ export async function handler(event: any) {
     const cfPolicy = cfB64(policyBytes);
     const cfSignature = cfB64(signatureBytes);
 
-    let common = `Path=${cfCookiePath}; HttpOnly; Secure; SameSite=Lax; Max-Age=${cfCookieTtlSeconds}`;
-    if (cfCookieDomain) common = `Domain=${cfCookieDomain}; ${common}`;
+    const cfAttrs = {
+      domain: cfCookieDomain || undefined,
+      path: cfCookiePath,
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Lax' as const,
+      maxAge: cfCookieTtlSeconds,
+    };
 
-    // Cookie name stays CloudFront-Key-Pair-Id, but the value is the Public Key ID (Key Groups).
-    cookiesOut.push(`CloudFront-Key-Pair-Id=${cfPublicKeyId}; ${common}`);
-    cookiesOut.push(`CloudFront-Policy=${cfPolicy}; ${common}`);
-    cookiesOut.push(`CloudFront-Signature=${cfSignature}; ${common}`);
+    // Cookie name stays CloudFront-Key-Pair-Id, value is the Public Key ID (Key Groups).
+    cookiesOut.push(buildCookie('CloudFront-Key-Pair-Id', cfPublicKeyId, cfAttrs));
+    cookiesOut.push(buildCookie('CloudFront-Policy', cfPolicy, cfAttrs));
+    cookiesOut.push(buildCookie('CloudFront-Signature', cfSignature, cfAttrs));
   } catch (e: any) {
-    cookiesOut.push(`${stateCookieName}=; ${clearTempCommon}`);
-    cookiesOut.push(`${pkceCookieName}=; ${clearTempCommon}`);
-    cookiesOut.push(`${postLoginCookieName}=; ${clearTempCommon}`);
+    cookiesOut.push(...clearTempCookies());
     return resp(502, `Failed to mint CloudFront signed cookies: ${e?.message ?? String(e)}`, { cookies: cookiesOut });
   }
 
-  cookiesOut.push(`${stateCookieName}=; ${clearTempCommon}`);
-  cookiesOut.push(`${pkceCookieName}=; ${clearTempCommon}`);
-  cookiesOut.push(`${postLoginCookieName}=; ${clearTempCommon}`);
+  // 4) Clear temp auth cookies
+  cookiesOut.push(...clearTempCookies());
 
   return {
     statusCode: 302,

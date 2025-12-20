@@ -16,7 +16,7 @@
   "cfCookieTtlSeconds": 3600,
 
   "originVerifyHeaderName": "X-Origin-Verify",
-  "originVerifyHeaderValue": "CHANGE_ME_TO_A_RANDOM_SECRET_STRING",
+  "originVerifyHeaderValueSecretArn": "arn:aws:ssm:eu-west-2:123456789012:xxxxxxx/xxxxxxxx/xxxxxxxx",
 
   "extraApiRoutes": [
     {
