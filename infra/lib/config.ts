@@ -4,5 +4,6 @@ export interface AppConfig {
   domain: string;
   cloudFrontCertArnUsEast1: string;
   cognitoDomainCertArn: string;
+  websitePath: string;
   enableWaf: boolean;
 }

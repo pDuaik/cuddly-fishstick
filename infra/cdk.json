@@ -101,6 +101,7 @@
     "@aws-cdk/aws-ecs-patterns:uniqueTargetGroupId": true,    
     "projectName": "cuddly-fishstick",
     "stage": "dev",
+    "websitePath": "assets/website-example",
     "domain": "__REQUIRED__",
     "cloudFrontCertArnUsEast1": "__REQUIRED__",
     "cognitoDomainCertArn": "__REQUIRED__",
