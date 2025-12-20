@@ -6,19 +6,24 @@ import { DataStack } from '../lib/data-stack';
 import { AuthStack } from '../lib/auth-stack';
 import type { AppConfig } from '../lib/config';
 
+type SettingsFile = Partial<{
+  projectName: string;
+  stage: string;
+  enableWaf: boolean;
+
+  domain: string;
+  cloudFrontCertArnUsEast1: string;
+  cognitoDomainCertArn: string;
+
+  // Keep in settings.json even if you don't use it yet:
+  cloudFrontPublicKeyPemPath: string;
+}>;
+
 const app = new cdk.App();
 
 // Helpers
 function ctx(key: string): string {
   return (app.node.tryGetContext(key) ?? '').toString().trim();
-}
-
-function requireValue(name: string, value?: string): string {
-  const v = (value ?? '').trim();
-  if (!v || v === '__REQUIRED__') {
-    throw new Error(`Missing required config "${name}". Set it in cdk.json context.`);
-  }
-  return v;
 }
 
 function ctxBool(key: string, defaultValue = false): boolean {
@@ -27,26 +32,61 @@ function ctxBool(key: string, defaultValue = false): boolean {
   return raw.toLowerCase() === 'true';
 }
 
+function requireValue(name: string, value?: string): string {
+  const v = (value ?? '').trim();
+  if (!v || v === '__REQUIRED__') {
+    throw new Error(`Missing required config "${name}". Set it in config/settings.json.`);
+  }
+  return v;
+}
+
+function readSettingsOrThrow(settingsAbsPath: string): SettingsFile {
+  if (!fs.existsSync(settingsAbsPath)) {
+    throw new Error(
+      `Missing config/settings.json (expected at ${settingsAbsPath}). ` +
+        `Create it before deploying.`,
+    );
+  }
+
+  const raw = fs.readFileSync(settingsAbsPath, 'utf8');
+  try {
+    const parsed = JSON.parse(raw) as SettingsFile;
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('settings.json did not contain a JSON object');
+    }
+    return parsed;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid JSON in config/settings.json: ${msg}`);
+  }
+}
+
+// Standard project paths (user-owned, outside infra)
+const repoRoot = path.resolve(__dirname, '..', '..');
+const settingsAbs = path.join(repoRoot, 'config', 'settings.json');
+const websiteAbs = path.join(repoRoot, 'website');
+
+// Validate standard folders exist
+if (!fs.existsSync(websiteAbs)) {
+  throw new Error(`website folder not found (expected at ${websiteAbs}). Create ./website first.`);
+}
+
+const settings = readSettingsOrThrow(settingsAbs);
+
 // Config
 const config: AppConfig = {
-  projectName: ctx('projectName') || 'cuddly-fishstick',
-  stage: ctx('stage') || 'dev',
+  // Template defaults, overridable by settings.json
+  projectName: (settings.projectName ?? ctx('projectName') ?? '').trim() || 'cuddly-fishstick',
+  stage: (settings.stage ?? ctx('stage') ?? '').trim() || 'dev',
+  enableWaf: typeof settings.enableWaf === 'boolean' ? settings.enableWaf : ctxBool('enableWaf', false),
 
-  domain: requireValue('domain', process.env.DOMAIN || ctx('domain')),
+  // Required user inputs (settings.json is source of truth)
+  domain: requireValue('domain', settings.domain),
+  cloudFrontCertArnUsEast1: requireValue('cloudFrontCertArnUsEast1', settings.cloudFrontCertArnUsEast1),
+  cognitoDomainCertArn: requireValue('cognitoDomainCertArn', settings.cognitoDomainCertArn),
 
-  cloudFrontCertArnUsEast1: requireValue(
-    'cloudFrontCertArnUsEast1',
-    process.env.CLOUDFRONT_CERT_ARN_US_EAST_1 || ctx('cloudFrontCertArnUsEast1'),
-  ),
-
-  cognitoDomainCertArn: requireValue(
-    'cognitoDomainCertArn',
-    process.env.COGNITO_DOMAIN_CERT_ARN || ctx('cognitoDomainCertArn'),
-  ),
-
-  websitePath: process.env.WEBSITE_PATH || ctx('websitePath') || 'assets/website-example',
-
-  enableWaf: ctxBool('enableWaf', false),
+  // Standard path (no longer configurable)
+  websitePath: 'website',
 };
 
 // Const
@@ -54,11 +94,6 @@ const env: cdk.Environment = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
   region: process.env.CDK_DEFAULT_REGION,
 };
-
-const websiteAbs = path.resolve(__dirname, '..', config.websitePath);
-if (!fs.existsSync(websiteAbs)) {
-  throw new Error(`websitePath not found: ${config.websitePath} (resolved to ${websiteAbs})`);
-}
 
 // Data stack
 new DataStack(app, `${config.projectName}-${config.stage}-data`, {

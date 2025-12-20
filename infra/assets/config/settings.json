@@ -1,0 +1,10 @@
+{
+    "projectName": "cuddly-fishstick",
+    "stage": "dev",
+    "domain": "example.com",
+    "cloudFrontCertArnUsEast1": "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "cognitoDomainCertArn": "arn:aws:acm:eu-west-2:123456789012:certificate/yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
+    "cloudFrontPublicKeyPemPath": "keys/cloudfront_public_key.pem",
+    "enableWaf": false,
+    "websitePath": "website"
+}
