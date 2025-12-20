@@ -21,6 +21,12 @@ function requireValue(name: string, value?: string): string {
   return v;
 }
 
+function ctxBool(key: string, defaultValue = false): boolean {
+  const raw = ctx(key);
+  if (!raw) return defaultValue;
+  return raw.toLowerCase() === 'true';
+}
+
 // Config
 const config: AppConfig = {
   projectName: ctx('projectName') || 'cuddly-fishstick',
@@ -40,7 +46,7 @@ const config: AppConfig = {
 
   websitePath: process.env.WEBSITE_PATH || ctx('websitePath') || 'assets/website-example',
 
-  enableWaf: ctx('enableWaf').toLowerCase() === 'true',
+  enableWaf: ctxBool('enableWaf', false),
 };
 
 // Const
@@ -55,7 +61,7 @@ if (!fs.existsSync(websiteAbs)) {
 }
 
 // Data stack
-const data = new DataStack(app, `${config.projectName}-${config.stage}-data`, {
+new DataStack(app, `${config.projectName}-${config.stage}-data`, {
   env,
   config,
 });

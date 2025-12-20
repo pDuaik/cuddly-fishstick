@@ -102,9 +102,9 @@
     "projectName": "cuddly-fishstick",
     "stage": "dev",
     "websitePath": "assets/website-example",
-    "domain": "__REQUIRED__",
-    "cloudFrontCertArnUsEast1": "__REQUIRED__",
-    "cognitoDomainCertArn": "__REQUIRED__",
+    "domain": "duaik.co.uk",
+    "cloudFrontCertArnUsEast1": "arn:aws:acm:us-east-1:...:certificate/...",
+    "cognitoDomainCertArn": "arn:aws:acm:eu-west-2:...:certificate/...",
     "enableWaf": false
   }
 }
