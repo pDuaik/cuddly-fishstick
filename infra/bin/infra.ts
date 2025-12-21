@@ -27,8 +27,7 @@ const config: AppConfig = {
   enableWaf: typeof settings.enableWaf === 'boolean' ? settings.enableWaf : ctxBool(app, 'enableWaf', false),
 
   domain: requireValue('domain', settings.domain),
-  cloudFrontCertArnUsEast1: requireValue('cloudFrontCertArnUsEast1', settings.cloudFrontCertArnUsEast1),
-  cognitoDomainCertArn: requireValue('cognitoDomainCertArn', settings.cognitoDomainCertArn),
+  certArnUsEast1: requireValue('certArnUsEast1', settings.certArnUsEast1),
 
   websitePath: 'website',
 };
@@ -68,7 +67,7 @@ const data = new DataStack(app, `${config.projectName}-${config.stage}-data`, {
 const auth = new AuthStack(app, `${config.projectName}-${config.stage}-auth`, {
   env,
   config,
-  cognitoDomainCertArn: config.cognitoDomainCertArn,
+  certArnUsEast1: config.certArnUsEast1,
 });
 
 new ApiStack(app, `${config.projectName}-${config.stage}-api`, {

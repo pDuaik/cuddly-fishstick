@@ -5,8 +5,7 @@
 
   "domain": "example.com",
 
-  "cloudFrontCertArnUsEast1": "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-  "cognitoDomainCertArn": "arn:aws:acm:eu-west-2:123456789012:certificate/yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
+  "certArnUsEast1": "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
 
   "cfPublicKeyId": "__REQUIRED__",
   "cfPrivateKeySecretArn": "arn:aws:secretsmanager:eu-west-2:123456789012:secret:cloudfront-private-key-abc123",

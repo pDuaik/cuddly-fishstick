@@ -2,8 +2,7 @@ export interface AppConfig {
   projectName: string;
   stage: string;
   domain: string;
-  cloudFrontCertArnUsEast1: string;
-  cognitoDomainCertArn: string;
+  certArnUsEast1: string;
   websitePath: string;
   enableWaf: boolean;
 }

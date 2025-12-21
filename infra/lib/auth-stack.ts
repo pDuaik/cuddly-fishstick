@@ -5,13 +5,7 @@ import type { AppConfig } from './config';
 
 export interface AuthStackProps extends cdk.StackProps {
   config: AppConfig;
-
-  /**
-   * REQUIRED:
-   * Cognito custom domain uses: auth.<rootDomain>
-   * This certificate must be in the SAME region as the User Pool (i.e. this stack region).
-   */
-  cognitoDomainCertArn: string;
+  certArnUsEast1: string;
 }
 
 /**
@@ -115,7 +109,7 @@ export class AuthStack extends cdk.Stack {
       domain: this.cognitoAuthDomain,
       userPoolId: this.userPool.userPoolId,
       customDomainConfig: {
-        certificateArn: props.cognitoDomainCertArn,
+        certificateArn: props.certArnUsEast1,
       },
     });
     domainRes.node.addDependency(this.userPool);

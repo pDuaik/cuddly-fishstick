@@ -9,8 +9,7 @@ export type SettingsFile = {
   enableWaf?: boolean;
 
   domain: string;
-  cloudFrontCertArnUsEast1: string;
-  cognitoDomainCertArn: string;
+  certArnUsEast1: string;
 
   cfPublicKeyId: string;
 
