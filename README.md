@@ -7,6 +7,9 @@ This project prioritizes correct security boundaries, least privilege, and fail-
 
 It is designed to be used as a foundation for proof-of-concepts and early-stage products where security and architecture decisions matter, even before scale.
 
+# Setup
+add A record 192.0.2.1 to your domain as a placeholder, or Cognito will throw an error.
+
 # Prerequisites: DNS & Certificates (Read This First)
 
 This project **requires a custom domain**.

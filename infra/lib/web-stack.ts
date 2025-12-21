@@ -21,16 +21,22 @@ export interface WebStackProps extends cdk.StackProps {
   websiteAbsPath: string; // absolute path to website folder
 }
 
-function ssmSecureDynamicReferenceFromParamArn(paramArn: string): string {
-  // arn:aws:ssm:REGION:ACCOUNT:parameter/PATH/NAME
+function ssmDynamicReferenceFromParamArn(paramArn: string): string {
   const marker = ':parameter/';
   const idx = paramArn.indexOf(marker);
   if (idx === -1) throw new Error(`Invalid SSM parameter ARN: ${paramArn}`);
-  const paramName = paramArn.slice(idx + marker.length);
-  if (!paramName) throw new Error(`Invalid SSM parameter ARN (missing name): ${paramArn}`);
-  // CloudFormation dynamic reference (pin to version 1; change if you want a specific version)
-  return `{{resolve:ssm-secure:${paramName}:1}}`;
+
+  // After ":parameter/" comes "shared/parameter-store" (no leading slash in ARN)
+  let name = paramArn.slice(idx + marker.length).trim();
+  if (!name) throw new Error(`Invalid SSM parameter ARN (missing name): ${paramArn}`);
+
+  // Your actual parameter name starts with "/" -> add it
+  if (!name.startsWith('/')) name = '/' + name;
+
+  // CloudFront supports non-secure SSM dynamic refs here
+  return `{{resolve:ssm:${name}:1}}`;
 }
+
 
 export class WebStack extends cdk.Stack {
   public readonly distributionId: string;
@@ -125,7 +131,7 @@ export class WebStack extends cdk.Stack {
     // -------------------------
     const originVerifyHeaderName =
       (props.originVerifyHeaderName || 'X-Origin-Verify').trim() || 'X-Origin-Verify';
-    const originVerifyHeaderValue = ssmSecureDynamicReferenceFromParamArn(
+    const originVerifyHeaderValue = ssmDynamicReferenceFromParamArn(
       props.originVerifyHeaderValueParameterArn,
     );
 

@@ -94,17 +94,27 @@ const api = new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
   extraApiRoutes,
 });
 
-// CloudFront HttpOrigin needs a hostname (no scheme, no trailing slash)
-const apiDomain = api.httpApi.apiEndpoint.replace(/^https?:\/\//, '').replace(/\/$/, '');
+const apiDomainName = cdk.Fn.select(
+  0,
+  cdk.Fn.split(
+    '/',
+    cdk.Fn.select(1, cdk.Fn.split('://', api.httpApi.apiEndpoint)),
+  ),
+);
 
 new WebStack(app, `${config.projectName}-${config.stage}-web`, {
   env,
+
+  // ✅ your site domain (CloudFront alias)
   domain: config.domain,
+
   certArnUsEast1: config.certArnUsEast1,
 
   siteBucket: data.siteBucket,
 
-  apiDomain,
+  // ✅ API hostname only (no https://)
+  apiDomain: apiDomainName,
+
   cfPublicKeyId,
 
   originVerifyHeaderName,
