@@ -12,31 +12,30 @@ export interface WebStackProps extends cdk.StackProps {
 
   siteBucket: s3.IBucket; // from DataStack
 
-  apiDomain: string; // no scheme, e.g. abc.execute-api.eu-west-2.amazonaws.com
+  apiDomain: string; // hostname only (no scheme), e.g. abc.execute-api.eu-west-2.amazonaws.com
   cfPublicKeyId: string; // CloudFront Public Key ID (Key Groups)
 
   originVerifyHeaderName: string; // e.g. X-Origin-Verify
-  originVerifyHeaderValueParameterArn: string; // SSM parameter ARN (SecureString recommended)
+  originVerifyHeaderValueParameterArn: string; // SSM parameter ARN (Type=String)
 
   websiteAbsPath: string; // absolute path to website folder
 }
 
-function ssmDynamicReferenceFromParamArn(paramArn: string): string {
+function ssmDynamicReferenceFromParamArn(paramArn: string, version = 1): string {
+  // Accepts: arn:aws:ssm:REGION:ACCOUNT:parameter/PATH/NAME
+  // Returns: {{resolve:ssm:/PATH/NAME:VERSION}}
   const marker = ':parameter/';
   const idx = paramArn.indexOf(marker);
   if (idx === -1) throw new Error(`Invalid SSM parameter ARN: ${paramArn}`);
 
-  // After ":parameter/" comes "shared/parameter-store" (no leading slash in ARN)
   let name = paramArn.slice(idx + marker.length).trim();
   if (!name) throw new Error(`Invalid SSM parameter ARN (missing name): ${paramArn}`);
 
-  // Your actual parameter name starts with "/" -> add it
+  // SSM parameter names are typically "/path/name". Console displays with leading "/".
   if (!name.startsWith('/')) name = '/' + name;
 
-  // CloudFront supports non-secure SSM dynamic refs here
-  return `{{resolve:ssm:${name}:1}}`;
+  return `{{resolve:ssm:${name}:${version}}}`;
 }
-
 
 export class WebStack extends cdk.Stack {
   public readonly distributionId: string;
@@ -50,6 +49,13 @@ export class WebStack extends cdk.Stack {
 
     const apiDomain = (props.apiDomain ?? '').trim();
     if (!apiDomain) throw new Error('WebStack: props.apiDomain is required.');
+
+    // Defensive: CloudFront origin domainName must be hostname only (no scheme/port/path)
+    if (apiDomain.includes('://') || apiDomain.includes('/') || apiDomain.includes(':')) {
+      throw new Error(
+        `WebStack: props.apiDomain must be a hostname only (no scheme/port/path). Got: ${apiDomain}`,
+      );
+    }
 
     const cert = acm.Certificate.fromCertificateArn(this, 'SiteCert', props.certArnUsEast1);
 
@@ -67,7 +73,7 @@ export class WebStack extends cdk.Stack {
     });
 
     // -------------------------
-    // Response headers policies (L2 -> we only need the IDs)
+    // Response headers policies
     // -------------------------
     const csp =
       "default-src 'self'; " +
@@ -117,7 +123,7 @@ export class WebStack extends cdk.Stack {
     });
 
     // -------------------------
-    // Key Group for signed cookies (no need to create PublicKey resource)
+    // Key Group for signed cookies
     // -------------------------
     const importedPublicKey = cloudfront.PublicKey.fromPublicKeyId(this, 'SignedCookiesPublicKey', props.cfPublicKeyId);
 
@@ -127,13 +133,14 @@ export class WebStack extends cdk.Stack {
     });
 
     // -------------------------
-    // CloudFront Distribution (L1) - avoids deprecated origins + avoids CDK bucket-policy mutation
+    // Origin verify header (dynamic reference)
+    // IMPORTANT: CloudFront origins do NOT support ssm-secure references here.
+    // Use SSM String parameter + {{resolve:ssm:/name:version}}.
     // -------------------------
     const originVerifyHeaderName =
       (props.originVerifyHeaderName || 'X-Origin-Verify').trim() || 'X-Origin-Verify';
-    const originVerifyHeaderValue = ssmDynamicReferenceFromParamArn(
-      props.originVerifyHeaderValueParameterArn,
-    );
+
+    const originVerifyHeaderValue = ssmDynamicReferenceFromParamArn(props.originVerifyHeaderValueParameterArn, 1);
 
     // Managed policy IDs
     const cacheOptimizedId = cloudfront.CachePolicy.CACHING_OPTIMIZED.cachePolicyId;
@@ -144,6 +151,9 @@ export class WebStack extends cdk.Stack {
     // S3 origin domain name (regional)
     const s3DomainName = props.siteBucket.bucketRegionalDomainName;
 
+    // -------------------------
+    // CloudFront Distribution (L1) — avoids deprecated origin classes
+    // -------------------------
     const dist = new cloudfront.CfnDistribution(this, 'SiteDistribution', {
       distributionConfig: {
         enabled: true,
@@ -273,16 +283,12 @@ export class WebStack extends cdk.Stack {
     });
 
     // -------------------------
-    // Deploy website
+    // Deploy website (upload only; no automatic invalidation here)
     // -------------------------
     new s3deploy.BucketDeployment(this, 'DeployWebsite', {
       sources: [s3deploy.Source.asset(props.websiteAbsPath)],
       destinationBucket: props.siteBucket,
     });
-
-    // If you want invalidation to happen automatically, keep it simple:
-    // - You can add a tiny custom resource later.
-    // For now: deployment uploads assets; you can invalidate manually or with a script.
 
     // Outputs
     this.distributionId = dist.ref;
