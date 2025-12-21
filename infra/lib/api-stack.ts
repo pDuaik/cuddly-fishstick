@@ -33,12 +33,7 @@ export interface ApiStackProps extends cdk.StackProps {
 
   originVerifyHeaderName: string; // default "X-Origin-Verify"
 
-  /**
-   * ✅ Parameter Store *parameter ARN* (SecureString recommended)
-   * Example:
-   * arn:aws:ssm:eu-west-2:123456789012:parameter/my-origin-verify
-   */
-  originVerifyHeaderValueSecretArn: string;
+  originVerifyHeaderValueParameterArn: string;
 
   extraApiRoutes?: ExtraApiRoute[];
 }
@@ -66,9 +61,9 @@ export class ApiStack extends cdk.Stack {
     const cfCookieDomain = requireNonEmpty('cfCookieDomain', props.cfCookieDomain);
 
     const originVerifyHeaderName = (props.originVerifyHeaderName || 'X-Origin-Verify').trim() || 'X-Origin-Verify';
-    const originVerifyHeaderValueSecretArn = requireNonEmpty(
-      'originVerifyHeaderValueSecretArn',
-      props.originVerifyHeaderValueSecretArn,
+    const originVerifyHeaderValueParameterArn = requireNonEmpty(
+      'originVerifyHeaderValueParameterArn',
+      props.originVerifyHeaderValueParameterArn,
     );
 
     const appBaseUrl = `https://${domain}`;
@@ -117,7 +112,7 @@ export class ApiStack extends cdk.Stack {
         ...cookieNames,
 
         ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueSecretArn,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
 
@@ -159,7 +154,7 @@ export class ApiStack extends cdk.Stack {
         CSRF_HEADER_NAME: 'X-CSRF-Token',
 
         ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueSecretArn,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
     props.sessionsTable.grantReadWriteData(authCallbackFn);
@@ -196,7 +191,7 @@ export class ApiStack extends cdk.Stack {
         CF_COOKIE_PATH: cfCookiePath,
 
         ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueSecretArn,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
     props.sessionsTable.grantReadWriteData(authLogoutFn);
@@ -211,7 +206,7 @@ export class ApiStack extends cdk.Stack {
         COOKIE_NAME: 'session',
 
         ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueSecretArn,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
     props.sessionsTable.grantReadData(sessionAuthorizerFn);
@@ -223,7 +218,7 @@ export class ApiStack extends cdk.Stack {
       handler: 'handler',
       environment: {
         ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueSecretArn,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
 
@@ -235,7 +230,7 @@ export class ApiStack extends cdk.Stack {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ['ssm:GetParameter'],
-          resources: [originVerifyHeaderValueSecretArn],
+          resources: [originVerifyHeaderValueParameterArn],
         }),
       );
     };

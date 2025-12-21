@@ -3,6 +3,7 @@ import * as cdk from 'aws-cdk-lib';
 import { DataStack } from '../lib/data-stack';
 import { AuthStack } from '../lib/auth-stack';
 import { ApiStack } from '../lib/api-stack';
+import { WebStack } from '../lib/web-stack';
 import type { AppConfig } from '../lib/config';
 import {
   repoPaths,
@@ -35,10 +36,9 @@ const config: AppConfig = {
 const originVerifyHeaderName =
   (settings.originVerifyHeaderName ?? 'X-Origin-Verify').toString().trim() || 'X-Origin-Verify';
 
-// ✅ NEW: SSM parameter ARN (SecureString)
-const originVerifyHeaderValueSecretArn = requireValue(
-  'originVerifyHeaderValueSecretArn',
-  settings.originVerifyHeaderValueSecretArn,
+const originVerifyHeaderValueParameterArn = requireValue(
+  'originVerifyHeaderValueParameterArn',
+  settings.originVerifyHeaderValueParameterArn,
 );
 
 const cfPublicKeyId = requireValue('cfPublicKeyId', settings.cfPublicKeyId);
@@ -59,6 +59,10 @@ const env: cdk.Environment = {
   region: process.env.CDK_DEFAULT_REGION,
 };
 
+// -------------------------
+// Stacks
+// -------------------------
+
 const data = new DataStack(app, `${config.projectName}-${config.stage}-data`, {
   env,
   config,
@@ -70,7 +74,7 @@ const auth = new AuthStack(app, `${config.projectName}-${config.stage}-auth`, {
   certArnUsEast1: config.certArnUsEast1,
 });
 
-new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
+const api = new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
   env,
   config,
   sessionsTable: data.sessionsTable,
@@ -85,7 +89,26 @@ new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
   cfCookieTtlSeconds,
 
   originVerifyHeaderName,
-  originVerifyHeaderValueSecretArn,
+  originVerifyHeaderValueParameterArn,
 
   extraApiRoutes,
+});
+
+// CloudFront HttpOrigin needs a hostname (no scheme, no trailing slash)
+const apiDomain = api.httpApi.apiEndpoint.replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+new WebStack(app, `${config.projectName}-${config.stage}-web`, {
+  env,
+  domain: config.domain,
+  certArnUsEast1: config.certArnUsEast1,
+
+  siteBucket: data.siteBucket,
+
+  apiDomain,
+  cfPublicKeyId,
+
+  originVerifyHeaderName,
+  originVerifyHeaderValueParameterArn,
+
+  websiteAbsPath: websiteAbs,
 });

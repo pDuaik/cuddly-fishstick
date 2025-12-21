@@ -20,7 +20,7 @@ export type SettingsFile = {
   cfCookieTtlSeconds?: number;
 
   originVerifyHeaderName?: string;
-  originVerifyHeaderValueSecretArn: string;
+  originVerifyHeaderValueParameterArn: string;
 
   extraApiRoutes?: {
     path: string;
