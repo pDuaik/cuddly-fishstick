@@ -230,18 +230,6 @@ export class WebStack extends cdk.Stack {
             compress: true,
           },
 
-          // /assets/config.json -> S3 (no-store)
-          {
-            pathPattern: '/assets/config.json',
-            targetOriginId: 'S3Origin',
-            viewerProtocolPolicy: 'redirect-to-https',
-            allowedMethods: ['GET', 'HEAD', 'OPTIONS'],
-            cachedMethods: ['GET', 'HEAD', 'OPTIONS'],
-            cachePolicyId: cacheDisabledId,
-            responseHeadersPolicyId: noStoreSecurityPolicy.responseHeadersPolicyId,
-            compress: true,
-          },
-
           // /app/* -> S3 protected by signed cookies
           {
             pathPattern: '/app/*',
@@ -252,6 +240,18 @@ export class WebStack extends cdk.Stack {
             cachePolicyId: cacheDisabledId,
             responseHeadersPolicyId: baseSecurityPolicy.responseHeadersPolicyId,
             trustedKeyGroups: [keyGroup.keyGroupId],
+            compress: true,
+          },
+
+          // /config/* -> S3 (no-store)
+          {
+            pathPattern: '/config/*',
+            targetOriginId: 'S3Origin',
+            viewerProtocolPolicy: 'redirect-to-https',
+            allowedMethods: ['GET', 'HEAD', 'OPTIONS'],
+            cachedMethods: ['GET', 'HEAD', 'OPTIONS'],
+            cachePolicyId: cacheDisabledId,
+            responseHeadersPolicyId: noStoreSecurityPolicy.responseHeadersPolicyId,
             compress: true,
           },
         ],
