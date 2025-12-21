@@ -1,0 +1,11 @@
+{
+  "mePath": "/api/me",
+  "authStartPath": "/auth/start",
+  "logoutPath": "/auth/logout",
+
+  "csrfDemoPath": "/api/demo/csrf",
+  "postLoginPath": "/app/protected.html",
+
+  "csrfCookieName": "__Host-csrf",
+  "csrfHeaderName": "X-CSRF-Token"
+}
