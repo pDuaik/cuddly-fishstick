@@ -12,6 +12,7 @@ export interface DataStackProps extends cdk.StackProps {
 export class DataStack extends cdk.Stack {
   public readonly sessionsTable: dynamodb.Table;
   public readonly siteBucket: s3.Bucket;
+  public readonly exampleTable: dynamodb.Table;
 
   constructor(scope: Construct, id: string, props: DataStackProps) {
     super(scope, id, props);
@@ -29,6 +30,17 @@ export class DataStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy,
     });
+
+    // -------------------------
+    // DynamoDB: demo counter (CSRF POST example)
+    // -------------------------
+    this.exampleTable = new dynamodb.Table(this, 'ExampleTable', {
+      tableName: `${projectName}-${stage}-example`,
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy,
+    });
+
 
     // -------------------------
     // S3: private site bucket (CloudFront will be granted access later via OAC)
@@ -51,5 +63,8 @@ export class DataStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'SiteBucketName', { value: this.siteBucket.bucketName });
     new cdk.CfnOutput(this, 'SiteBucketArn', { value: this.siteBucket.bucketArn });
+
+    new cdk.CfnOutput(this, 'DemoTableName', { value: this.exampleTable.tableName });
+    new cdk.CfnOutput(this, 'DemoTableArn', { value: this.exampleTable.tableArn });
   }
 }

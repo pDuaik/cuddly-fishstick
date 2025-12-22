@@ -20,6 +20,7 @@ export interface ApiStackProps extends cdk.StackProps {
   config: AppConfig;
 
   sessionsTable: dynamodb.ITable;
+  exampleTable: dynamodb.ITable;
 
   cognitoDomain: string;
   cognitoClientId: string;
@@ -134,11 +135,6 @@ export class ApiStack extends cdk.Stack {
 
         ...cookieNames,
 
-        /**
-         * ✅ NEW SYSTEM (Key Groups):
-         * This value is placed into the signed cookie field "CloudFront-Key-Pair-Id".
-         * Despite the cookie field name, this is the CloudFront *Public Key ID*.
-         */
         CF_PUBLIC_KEY_ID: cfPublicKeyId,
 
         CF_PRIVATE_KEY_SECRET_ARN: cfPrivateKeySecretArn,
@@ -222,6 +218,35 @@ export class ApiStack extends cdk.Stack {
       },
     });
 
+    const exampleAuthCallFn = new NodejsFunction(this, 'ExampleAuthCallFn', {
+      ...lambdaDefaults,
+      timeout: cdk.Duration.seconds(10),
+      entry: path.join(repoRoot, 'lambda', 'api', 'example-auth-call.ts'),
+      handler: 'handler',
+      environment: {
+        ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
+      },
+    });
+
+    const exampleCsrfCallFn = new NodejsFunction(this, 'ExampleCsrfCallFn', {
+      ...lambdaDefaults,
+      timeout: cdk.Duration.seconds(10),
+      entry: path.join(repoRoot, 'lambda', 'api', 'example-csrf-call.ts'),
+      handler: 'handler',
+      environment: {
+        DEMO_TABLE_NAME: props.exampleTable.tableName,
+
+        CSRF_COOKIE_NAME: '__Host-csrf',
+        CSRF_HEADER_NAME: 'X-CSRF-Token',
+
+        ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
+      },
+    });
+
+    props.exampleTable.grantReadWriteData(exampleCsrfCallFn);
+
     // ---------------------------------------------------------------------
     // IAM: allow lambdas to read SSM Parameter Store value
     // We accept a full parameter ARN in settings; easiest is to allow GetParameter on that ARN.
@@ -240,6 +265,8 @@ export class ApiStack extends cdk.Stack {
     allowReadOriginVerifyParam(authLogoutFn);
     allowReadOriginVerifyParam(sessionAuthorizerFn);
     allowReadOriginVerifyParam(meFn);
+    allowReadOriginVerifyParam(exampleAuthCallFn);
+    allowReadOriginVerifyParam(exampleCsrfCallFn);
 
     // ---------------------------------------------------------------------
     // HTTP API + Integrations
