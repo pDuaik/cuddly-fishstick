@@ -76,7 +76,7 @@ export class WebStack extends cdk.Stack {
       "default-src 'self'; " +
       "base-uri 'self'; " +
       "object-src 'none'; " +
-      "frame-ancestors 'none'; " +
+      "frame-ancestors 'self'; " +
       "form-action 'self'; " +
       "script-src 'self'; " +
       "style-src 'self'; " +
