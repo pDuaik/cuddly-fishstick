@@ -4,7 +4,6 @@ import { Construct } from 'constructs';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 
 export interface WebStackProps extends cdk.StackProps {
   domain: string; // example.com or www.example.com
@@ -17,8 +16,6 @@ export interface WebStackProps extends cdk.StackProps {
 
   originVerifyHeaderName: string; // e.g. X-Origin-Verify
   originVerifyHeaderValueParameterArn: string; // SSM parameter ARN (Type=String)
-
-  websiteAbsPath: string; // absolute path to website folder
 }
 
 function ssmDynamicReferenceFromParamArn(paramArn: string, version = 1): string {
@@ -280,14 +277,6 @@ export class WebStack extends cdk.Stack {
           },
         ],
       },
-    });
-
-    // -------------------------
-    // Deploy website (upload only; no automatic invalidation here)
-    // -------------------------
-    new s3deploy.BucketDeployment(this, 'DeployWebsite', {
-      sources: [s3deploy.Source.asset(props.websiteAbsPath)],
-      destinationBucket: props.siteBucket,
     });
 
     // Outputs

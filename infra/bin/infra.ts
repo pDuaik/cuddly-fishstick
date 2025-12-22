@@ -7,18 +7,18 @@ import { WebStack } from '../lib/web-stack';
 import type { AppConfig } from '../lib/config';
 import {
   repoPaths,
-  assertFolderExists,
   readSettingsOrThrow,
   requireValue,
   normalizeExtraRoutes,
   ctx,
   ctxBool,
+  assertFolderExists,
 } from './infra-helpers';
 
 const app = new cdk.App();
 
-const { settingsAbs, websiteAbs } = repoPaths();
-assertFolderExists(websiteAbs, 'website');
+const { settingsAbs } = repoPaths();
+assertFolderExists(settingsAbs, 'config');
 
 const settings = readSettingsOrThrow(settingsAbs);
 
@@ -119,6 +119,4 @@ new WebStack(app, `${config.projectName}-${config.stage}-web`, {
 
   originVerifyHeaderName,
   originVerifyHeaderValueParameterArn,
-
-  websiteAbsPath: websiteAbs,
 });

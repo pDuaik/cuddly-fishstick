@@ -23,17 +23,6 @@ export function timingSafeEqualStr(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ab, bb);
 }
 
-export function env(name: string, fallback = ''): string {
-  const v = (process.env[name] ?? '').trim();
-  return v || (fallback ?? '').trim();
-}
-
-export function requireEnv(name: string): string {
-  const v = (process.env[name] ?? '').trim();
-  if (!v) throw new Error(`Missing env: ${name}`);
-  return v;
-}
-
 export function getHeader(event: HeaderCookieEvent | any, name: string): string {
   const headers = (event?.headers ?? {}) as Record<string, string | undefined>;
   const wanted = name.toLowerCase();
@@ -97,60 +86,20 @@ let cached: { arnOrName: string; expected: string } | null = null;
 function ssmParamNameFromArnOrName(arnOrName: string): string {
   const s = (arnOrName ?? '').trim();
   if (!s) return '';
-  if (!s.startsWith('arn:')) return s;
+
+  // If user passed a plain name, normalize it
+  if (!s.startsWith('arn:')) {
+    return s.startsWith('/') ? s : `/${s}`;
+  }
 
   const marker = ':parameter/';
   const idx = s.indexOf(marker);
   if (idx === -1) return s; // let AWS error if malformed
-  return s.slice(idx + marker.length);
+
+  const name = s.slice(idx + marker.length); // might be "shared/parameter-store" or "/shared/parameter-store"
+  return name.startsWith('/') ? name : `/${name}`;
 }
 
-async function getOriginVerifyExpected(): Promise<string> {
-  const arnOrName = env('ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN', '');
-  if (!arnOrName) return '';
-
-  if (cached && cached.arnOrName === arnOrName) return cached.expected;
-
-  const Name = ssmParamNameFromArnOrName(arnOrName);
-
-  const out = await ssm.send(
-    new GetParameterCommand({
-      Name,
-      WithDecryption: true,
-    }),
-  );
-
-  const expected = (out.Parameter?.Value ?? '').trim();
-  cached = { arnOrName, expected };
-  return expected;
-}
-
-export async function enforceOriginVerify(event: HeaderCookieEvent | any): Promise<OriginVerifyResult> {
-  const headerName = env('ORIGIN_VERIFY_HEADER_NAME', '');
-  if (!headerName) {
-    return { ok: false, statusCode: 500, message: 'Server misconfigured: origin verify header not set' };
-  }
-
-  const actual = getHeader(event, headerName);
-  if (!actual) return { ok: false, statusCode: 403, message: 'Forbidden (missing origin verify header)' };
-
-  let expected = '';
-  try {
-    expected = await getOriginVerifyExpected();
-  } catch {
-    return { ok: false, statusCode: 500, message: 'Server misconfigured: origin verify secret not readable' };
-  }
-
-  if (!expected) {
-    return { ok: false, statusCode: 500, message: 'Server misconfigured: origin verify secret empty' };
-  }
-
-  if (!timingSafeEqualStr(actual, expected)) {
-    return { ok: false, statusCode: 403, message: 'Forbidden (bad origin verify header)' };
-  }
-
-  return { ok: true };
-}
 
 export async function originVerifyOk(event: HeaderCookieEvent | any): Promise<boolean> {
   return (await enforceOriginVerify(event)).ok;
@@ -275,4 +224,121 @@ export function signPolicyRsaSha1(privateKeyPem: string, message: Buffer): Buffe
   signer.update(message);
   signer.end();
   return signer.sign(privateKeyPem);
+}
+
+// helpers.ts (only the updated functions below)
+
+export function env(name: string, fallback = ''): string {
+  const v = (process.env[name] ?? '').trim();
+
+  // Debug: show if present and length (don’t leak secrets)
+  console.log(`[env] ${name}: present=${!!v} len=${v.length} fallback=${fallback ? 'yes' : 'no'}`);
+
+  return v || (fallback ?? '').trim();
+}
+
+export function requireEnv(name: string): string {
+  const v = (process.env[name] ?? '').trim();
+
+  // Debug: show if present and length
+  console.log(`[requireEnv] ${name}: present=${!!v} len=${v.length}`);
+
+  if (!v) {
+    // Debug: catch typos / missing CDK injection
+    console.log('[requireEnv] available env keys:', Object.keys(process.env).sort());
+    throw new Error(`Missing env: ${name}`);
+  }
+  return v;
+}
+
+async function getOriginVerifyExpected(): Promise<string> {
+  const arnOrName = env('ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN', '');
+  if (!arnOrName) {
+    console.log('[origin-verify] SSM param not configured (ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN empty)');
+    return '';
+  }
+
+  if (cached && cached.arnOrName === arnOrName) {
+    console.log('[origin-verify] using cached expected value', {
+      arnOrName,
+      expectedLen: cached.expected.length,
+    });
+    return cached.expected;
+  }
+
+  const Name = ssmParamNameFromArnOrName(arnOrName);
+
+  console.log('[origin-verify] fetching expected from SSM', {
+    arnOrName,
+    resolvedName: Name,
+  });
+
+  const out = await ssm.send(
+    new GetParameterCommand({
+      Name,
+      WithDecryption: true,
+    }),
+  );
+
+  const expected = (out.Parameter?.Value ?? '').trim();
+
+  console.log('[origin-verify] SSM response', {
+    resolvedName: Name,
+    hasParameter: !!out.Parameter,
+    hasValue: !!out.Parameter?.Value,
+    valueLen: expected.length,
+    // helpful when debugging region/account issues:
+    version: out.Parameter?.Version,
+    type: out.Parameter?.Type,
+  });
+
+  cached = { arnOrName, expected };
+  return expected;
+}
+
+export async function enforceOriginVerify(event: HeaderCookieEvent | any): Promise<OriginVerifyResult> {
+  const headerName = env('ORIGIN_VERIFY_HEADER_NAME', '');
+  if (!headerName) {
+    console.log('[origin-verify] missing ORIGIN_VERIFY_HEADER_NAME');
+    return { ok: false, statusCode: 500, message: 'Server misconfigured: origin verify header not set' };
+  }
+
+  const actual = getHeader(event, headerName);
+  if (!actual) {
+    console.log('[origin-verify] missing header on request', { headerName });
+    return { ok: false, statusCode: 403, message: 'Forbidden (missing origin verify header)' };
+  }
+
+  let expected = '';
+  try {
+    expected = await getOriginVerifyExpected();
+  } catch (err: any) {
+    // ✅ this is the most important log for your current error
+    console.log('[origin-verify] failed to read expected from SSM', {
+      name: err?.name,
+      message: err?.message,
+      // AWS SDK v3 often includes this:
+      statusCode: err?.$metadata?.httpStatusCode,
+      requestId: err?.$metadata?.requestId,
+    });
+
+    return { ok: false, statusCode: 500, message: 'Server misconfigured: origin verify secret not readable' };
+  }
+
+  if (!expected) {
+    console.log('[origin-verify] expected value empty after SSM read');
+    return { ok: false, statusCode: 500, message: 'Server misconfigured: origin verify secret empty' };
+  }
+
+  if (!timingSafeEqualStr(actual, expected)) {
+    console.log('[origin-verify] header mismatch', {
+      headerName,
+      actualLen: actual.length,
+      expectedLen: expected.length,
+    });
+    return { ok: false, statusCode: 403, message: 'Forbidden (bad origin verify header)' };
+  }
+
+  console.log('[origin-verify] ok');
+  return { ok: true };
 }
