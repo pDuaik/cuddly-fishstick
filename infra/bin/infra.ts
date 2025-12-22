@@ -6,19 +6,17 @@ import { ApiStack } from '../lib/api-stack';
 import { WebStack } from '../lib/web-stack';
 import type { AppConfig } from '../lib/config';
 import {
-  repoPaths,
+  settingsPath,
   readSettingsOrThrow,
   requireValue,
   normalizeExtraRoutes,
   ctx,
   ctxBool,
-  assertFolderExists,
 } from './infra-helpers';
 
 const app = new cdk.App();
 
-const { settingsAbs } = repoPaths();
-assertFolderExists(settingsAbs, 'config');
+const { settingsAbs } = settingsPath();
 
 const settings = readSettingsOrThrow(settingsAbs);
 

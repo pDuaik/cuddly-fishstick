@@ -89,17 +89,9 @@ export function normalizeExtraRoutes(input?: SettingsFile['extraApiRoutes']): Ex
   });
 }
 
-export function repoPaths() {
+export function settingsPath() {
   const repoRoot = path.resolve(__dirname, '..', '..');
   return {
-    repoRoot,
-    settingsAbs: path.join(repoRoot, 'config', 'settings.json'),
-    websiteAbs: path.join(repoRoot, 'website'),
+    settingsAbs: path.join(repoRoot, 'settings.json')
   };
-}
-
-export function assertFolderExists(absPath: string, label: string) {
-  if (!fs.existsSync(absPath)) {
-    throw new Error(`${label} folder not found (expected at ${absPath}).`);
-  }
 }
