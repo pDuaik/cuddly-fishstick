@@ -214,6 +214,16 @@ export async function handler(event: any) {
     cookiesOut.push(buildCookie('CloudFront-Policy', cfPolicy, cfAttrs));
     cookiesOut.push(buildCookie('CloudFront-Signature', cfSignature, cfAttrs));
   } catch (e: any) {
+    console.log('[cf-sign] failed to mint signed cookies', {
+      name: e?.name,
+      message: e?.message,
+      code: e?.code,
+      stack: e?.stack?.split('\n').slice(0, 3).join('\n'),
+      // AWS SDK v3 errors sometimes include metadata
+      httpStatus: e?.$metadata?.httpStatusCode,
+      requestId: e?.$metadata?.requestId,
+    });
+
     cookiesOut.push(...clearTempCookies());
     return resp(502, `Failed to mint CloudFront signed cookies: ${e?.message ?? String(e)}`, { cookies: cookiesOut });
   }

@@ -212,20 +212,6 @@ export function buildPolicy(resource: string, expiresEpoch: number): Buffer {
   return Buffer.from(JSON.stringify(policy), 'utf8');
 }
 
-export async function loadPrivateKeyFromSecrets(secretArn: string): Promise<string> {
-  const resp = await secrets.send(new GetSecretValueCommand({ SecretId: secretArn }));
-  if (resp.SecretString && resp.SecretString.trim()) return resp.SecretString;
-  if (resp.SecretBinary) return Buffer.from(resp.SecretBinary as any).toString('utf8');
-  throw new Error('Secret value was empty');
-}
-
-export function signPolicyRsaSha1(privateKeyPem: string, message: Buffer): Buffer {
-  const signer = crypto.createSign('RSA-SHA1');
-  signer.update(message);
-  signer.end();
-  return signer.sign(privateKeyPem);
-}
-
 // helpers.ts (only the updated functions below)
 
 export function env(name: string, fallback = ''): string {
@@ -341,4 +327,96 @@ export async function enforceOriginVerify(event: HeaderCookieEvent | any): Promi
 
   console.log('[origin-verify] ok');
   return { ok: true };
+}
+
+export function signPolicyRsaSha1(privateKeyPem: string, message: Buffer): Buffer {
+  let keyObject: crypto.KeyObject;
+  try {
+    keyObject = crypto.createPrivateKey({ key: privateKeyPem, format: 'pem' });
+  } catch (e: any) {
+    console.log('[cf-sign] createPrivateKey failed', {
+      name: e?.name,
+      message: e?.message,
+      code: e?.code,
+    });
+    throw e;
+  }
+
+  const signer = crypto.createSign('RSA-SHA1');
+  signer.update(message);
+  signer.end();
+  return signer.sign(keyObject);
+}
+
+export async function loadPrivateKeyFromSecrets(secretArn: string): Promise<string> {
+  const out = await secrets.send(new GetSecretValueCommand({ SecretId: secretArn }));
+
+  let raw = (out.SecretString ?? '').trim();
+  const from = raw ? 'SecretString' : (out.SecretBinary ? 'SecretBinary' : 'empty');
+
+  if (!raw && out.SecretBinary) {
+    raw = Buffer.from(out.SecretBinary as any).toString('utf8').trim();
+  }
+  if (!raw) throw new Error('Secret value was empty');
+
+  // If JSON, extract key field
+  if (raw.startsWith('{')) {
+    const obj = JSON.parse(raw) as Record<string, unknown>;
+    const candidate =
+      (typeof obj.private_key === 'string' && obj.private_key) ||
+      (typeof obj.privateKey === 'string' && obj.privateKey) ||
+      (typeof obj.key === 'string' && obj.key) ||
+      '';
+    if (!candidate) throw new Error('Secret JSON missing private_key (or privateKey/key)');
+    raw = candidate.trim();
+  }
+
+  // Convert literal "\n" sequences into real newlines (if present)
+  raw = raw.replace(/\\n/g, '\n').trim();
+
+  // Strip surrounding quotes (your log shows it starts with a quote)
+  raw = raw.replace(/^['"]+|['"]+$/g, '').trim();
+
+  // If it’s a one-line PEM (header/body/footer all in one line), reformat it.
+  // e.g. "-----BEGIN PRIVATE KEY----- MIIE... -----END PRIVATE KEY-----"
+  if (raw.includes('BEGIN PRIVATE KEY') && raw.includes('END PRIVATE KEY') && !raw.includes('\n')) {
+    // pull out the base64 between markers (allow spaces)
+    const begin = '-----BEGIN PRIVATE KEY-----';
+    const end = '-----END PRIVATE KEY-----';
+
+    const b = raw.indexOf(begin);
+    const e = raw.indexOf(end);
+
+    if (b === -1 || e === -1 || e <= b) throw new Error('PEM markers not found / malformed');
+
+    const base64Body = raw
+      .slice(b + begin.length, e)
+      .replace(/\s+/g, '') // remove spaces
+      .trim();
+
+    // chunk into standard 64-char PEM lines
+    const lines: string[] = [];
+    for (let i = 0; i < base64Body.length; i += 64) {
+      lines.push(base64Body.slice(i, i + 64));
+    }
+
+    raw = `${begin}\n${lines.join('\n')}\n${end}\n`;
+  }
+
+  // Safe diagnostics (no key leakage)
+  console.log('[secrets] private key loaded (safe metadata)', {
+    secretArn,
+    from,
+    len: raw.length,
+    startsWith: JSON.stringify(raw.slice(0, 30)),
+    hasBegin: raw.includes('BEGIN'),
+    hasPrivateKey: raw.includes('PRIVATE KEY'),
+    hasNewlines: raw.includes('\n'),
+  });
+
+  if (!raw.includes('BEGIN') || !raw.includes('PRIVATE KEY') || !raw.includes('END')) {
+    throw new Error('Secret does not look like a PEM private key');
+  }
+
+  return raw;
 }
