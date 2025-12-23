@@ -83,7 +83,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const cookies = [
     buildCookie(stateCookieName, state, authCookieAttrs),
     buildCookie(verifierCookieName, verifier, authCookieAttrs),
-    buildCookie(postLoginCookieName, nextPath, authCookieAttrs),
+    buildCookie(postLoginCookieName, encodeURIComponent(nextPath), authCookieAttrs),
   ];
 
   const authorizeUrl =
