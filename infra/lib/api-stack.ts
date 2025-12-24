@@ -76,8 +76,10 @@ export class ApiStack extends cdk.Stack {
     const cfCookiePath = (props.cfCookiePath ?? '/').trim() || '/';
     const cfCookieTtlSeconds = props.cfCookieTtlSeconds ?? 3600;
 
-    // ✅ Stage 1: still signs /app/* only (you'll update to include /u/* when you update buildPolicy)
+    // ✅ Stage 1: sign app and u
     const cfAppResource = `${appBaseUrl}/app/*`;
+    const cfUResource = `${appBaseUrl}/u/*`;
+
 
     const cookieNames = {
       OAUTH_STATE_COOKIE_NAME: 'oauth_state',
@@ -150,6 +152,7 @@ export class ApiStack extends cdk.Stack {
         CF_COOKIE_PATH: cfCookiePath,
 
         CF_APP_RESOURCE: cfAppResource,
+        CF_U_RESOURCE: cfUResource,
         CF_COOKIE_TTL_SECONDS: String(cfCookieTtlSeconds),
 
         CSRF_COOKIE_NAME: '__Host-csrf',
@@ -162,7 +165,7 @@ export class ApiStack extends cdk.Stack {
 
     // DynamoDB permissions
     props.sessionsTable.grantReadWriteData(authCallbackFn);
-    props.userProfileTable.grantReadWriteData(authCallbackFn); // 👈 NEW
+    props.userProfileTable.grantReadWriteData(authCallbackFn);
 
     // CloudFront private key (Secrets Manager)
     authCallbackFn.addToRolePolicy(
