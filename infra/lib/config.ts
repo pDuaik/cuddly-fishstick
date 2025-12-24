@@ -1,3 +1,4 @@
+// lib/config.ts
 export interface AppConfig {
   projectName: string;
   stage: string;

@@ -1,3 +1,4 @@
+// lib/data-stack.ts
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -11,7 +12,11 @@ export interface DataStackProps extends cdk.StackProps {
 
 export class DataStack extends cdk.Stack {
   public readonly sessionsTable: dynamodb.Table;
+  public readonly userProfileTable: dynamodb.Table;
+
   public readonly siteBucket: s3.Bucket;
+  public readonly usersBucket: s3.Bucket;
+
   public readonly exampleTable: dynamodb.Table;
 
   constructor(scope: Construct, id: string, props: DataStackProps) {
@@ -21,12 +26,23 @@ export class DataStack extends cdk.Stack {
     const removalPolicy = props.removalPolicy ?? cdk.RemovalPolicy.DESTROY;
 
     // -------------------------
-    // DynamoDB: sessions
+    // DynamoDB: sessions (ephemeral, TTL)
     // -------------------------
     this.sessionsTable = new dynamodb.Table(this, 'SessionsTable', {
       tableName: `${projectName}-${stage}-sessions`,
       partitionKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
       timeToLiveAttribute: 'expires_at',
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy,
+    });
+
+    // -------------------------
+    // DynamoDB: user profile / config index (persistent)
+    // Maps: user_sub -> opaque_id (stable per user)
+    // -------------------------
+    this.userProfileTable = new dynamodb.Table(this, 'UserProfileTable', {
+      tableName: `${projectName}-${stage}-user-profile`,
+      partitionKey: { name: 'user_sub', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy,
     });
@@ -40,7 +56,6 @@ export class DataStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy,
     });
-
 
     // -------------------------
     // S3: private site bucket (CloudFront will be granted access later via OAC)
@@ -57,12 +72,33 @@ export class DataStack extends cdk.Stack {
       autoDeleteObjects: removalPolicy === cdk.RemovalPolicy.DESTROY,
     });
 
+    // -------------------------
+    // S3: private users bucket (per-user runtime/theme files under /u/*)
+    // CloudFront will be granted access later via OAC (separate origin/behavior).
+    // -------------------------
+    this.usersBucket = new s3.Bucket(this, 'UsersBucket', {
+      // Intentionally no bucketName: let CloudFormation ensure global uniqueness
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      versioned: false,
+
+      removalPolicy,
+      autoDeleteObjects: removalPolicy === cdk.RemovalPolicy.DESTROY,
+    });
+
     // Outputs
     new cdk.CfnOutput(this, 'SessionsTableName', { value: this.sessionsTable.tableName });
     new cdk.CfnOutput(this, 'SessionsTableArn', { value: this.sessionsTable.tableArn });
 
+    new cdk.CfnOutput(this, 'UserProfileTableName', { value: this.userProfileTable.tableName });
+    new cdk.CfnOutput(this, 'UserProfileTableArn', { value: this.userProfileTable.tableArn });
+
     new cdk.CfnOutput(this, 'SiteBucketName', { value: this.siteBucket.bucketName });
     new cdk.CfnOutput(this, 'SiteBucketArn', { value: this.siteBucket.bucketArn });
+
+    new cdk.CfnOutput(this, 'UsersBucketName', { value: this.usersBucket.bucketName });
+    new cdk.CfnOutput(this, 'UsersBucketArn', { value: this.usersBucket.bucketArn });
 
     new cdk.CfnOutput(this, 'DemoTableName', { value: this.exampleTable.tableName });
     new cdk.CfnOutput(this, 'DemoTableArn', { value: this.exampleTable.tableArn });

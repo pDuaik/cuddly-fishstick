@@ -9,7 +9,8 @@ export interface WebStackProps extends cdk.StackProps {
   domain: string; // example.com or www.example.com
   certArnUsEast1: string; // ACM cert in us-east-1 for CloudFront
 
-  siteBucket: s3.IBucket; // from DataStack
+  siteBucket: s3.IBucket; // from DataStack (static site + /app + /config)
+  usersBucket: s3.IBucket; // from DataStack (per-user /u/* artifacts)
 
   apiDomain: string; // hostname only (no scheme), e.g. abc.execute-api.eu-west-2.amazonaws.com
   cfPublicKeyId: string; // CloudFront Public Key ID (Key Groups)
@@ -28,9 +29,7 @@ function ssmDynamicReferenceFromParamArn(paramArn: string, version = 1): string 
   let name = paramArn.slice(idx + marker.length).trim();
   if (!name) throw new Error(`Invalid SSM parameter ARN (missing name): ${paramArn}`);
 
-  // SSM parameter names are typically "/path/name". Console displays with leading "/".
   if (!name.startsWith('/')) name = '/' + name;
-
   return `{{resolve:ssm:${name}:${version}}}`;
 }
 
@@ -49,20 +48,18 @@ export class WebStack extends cdk.Stack {
 
     // Defensive: CloudFront origin domainName must be hostname only (no scheme/port/path)
     if (apiDomain.includes('://') || apiDomain.includes('/') || apiDomain.includes(':')) {
-      throw new Error(
-        `WebStack: props.apiDomain must be a hostname only (no scheme/port/path). Got: ${apiDomain}`,
-      );
+      throw new Error(`WebStack: props.apiDomain must be a hostname only (no scheme/port/path). Got: ${apiDomain}`);
     }
 
     const cert = acm.Certificate.fromCertificateArn(this, 'SiteCert', props.certArnUsEast1);
 
     // -------------------------
-    // OAC (L1)
+    // OAC (L1) - can be reused across S3 origins
     // -------------------------
-    const oac = new cloudfront.CfnOriginAccessControl(this, 'SiteOAC', {
+    const oac = new cloudfront.CfnOriginAccessControl(this, 'S3OAC', {
       originAccessControlConfig: {
-        name: `${id}-site-bucket-oac`,
-        description: 'OAC for private S3 origin',
+        name: `${id}-s3-oac`,
+        description: 'OAC for private S3 origins',
         originAccessControlOriginType: 's3',
         signingBehavior: 'always',
         signingProtocol: 'sigv4',
@@ -123,7 +120,6 @@ export class WebStack extends cdk.Stack {
     // Key Group for signed cookies
     // -------------------------
     const importedPublicKey = cloudfront.PublicKey.fromPublicKeyId(this, 'SignedCookiesPublicKey', props.cfPublicKeyId);
-
     const keyGroup = new cloudfront.KeyGroup(this, 'SignedCookiesKeyGroup', {
       items: [importedPublicKey],
       comment: 'KeyGroup for signed cookies protection',
@@ -131,12 +127,8 @@ export class WebStack extends cdk.Stack {
 
     // -------------------------
     // Origin verify header (dynamic reference)
-    // IMPORTANT: CloudFront origins do NOT support ssm-secure references here.
-    // Use SSM String parameter + {{resolve:ssm:/name:version}}.
     // -------------------------
-    const originVerifyHeaderName =
-      (props.originVerifyHeaderName || 'X-Origin-Verify').trim() || 'X-Origin-Verify';
-
+    const originVerifyHeaderName = (props.originVerifyHeaderName || 'X-Origin-Verify').trim() || 'X-Origin-Verify';
     const originVerifyHeaderValue = ssmDynamicReferenceFromParamArn(props.originVerifyHeaderValueParameterArn, 1);
 
     // Managed policy IDs
@@ -145,16 +137,83 @@ export class WebStack extends cdk.Stack {
     const orpAllViewerExceptHostId =
       cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER.originRequestPolicyId;
 
-    // S3 origin domain name (regional)
-    const s3DomainName = props.siteBucket.bucketRegionalDomainName;
+    // S3 origin domain names (regional)
+    const siteS3DomainName = props.siteBucket.bucketRegionalDomainName;
+    const usersS3DomainName = props.usersBucket.bucketRegionalDomainName;
 
     // -------------------------
-    // CloudFront Distribution (L1) — avoids deprecated origin classes
+    // CloudFront Function: rewrite /u/me/* -> /u/uk/<opaque>/*
+    // and deny direct /u/uk/* (publicly)
+    // -------------------------
+    const uMeRewriteFn = new cloudfront.Function(this, 'UPathRewriteFn', {
+      comment: 'Rewrite /u/me/* to /u/uk/<__Host-uk>/*; deny direct /u/uk/*',
+      code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var req = event.request;
+  var uri = req.uri || "/";
+
+  // Only care about /u/*
+  if (uri.indexOf("/u/") !== 0) return req;
+
+  // Deny direct access to /u/uk/* (forces callers to use /u/me/*)
+  if (uri.indexOf("/u/uk/") === 0) {
+    return {
+      statusCode: 403,
+      statusDescription: "Forbidden",
+      headers: {
+        "cache-control": { value: "no-store" },
+        "content-type": { value: "text/plain; charset=utf-8" }
+      },
+      body: "Forbidden"
+    };
+  }
+
+  // Rewrite /u/me/* -> /u/uk/<cookie>/*
+  if (uri.indexOf("/u/me/") === 0) {
+    var cookieHeader = (req.headers && req.headers.cookie && req.headers.cookie.value) ? req.headers.cookie.value : "";
+    var opaque = "";
+
+    // Simple cookie parse (avoid heavy logic; CloudFront Functions are constrained)
+    // Prefer __Host-uk, fallback to uk if you ever change name.
+    var parts = cookieHeader.split(";");
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i].trim();
+      if (p.indexOf("__Host-uk=") === 0) { opaque = p.substring("__Host-uk=".length); break; }
+      if (!opaque && p.indexOf("uk=") === 0) { opaque = p.substring("uk=".length); }
+    }
+
+    // If missing, don't rewrite. The request will 404 in the users bucket,
+    // and the page will fall back to base.css.
+    if (!opaque) return req;
+
+    // Keep remainder after /u/me/
+    var rest = uri.substring("/u/me/".length);
+    req.uri = "/u/uk/" + opaque + "/" + rest;
+    return req;
+  }
+
+  // Anything else under /u/* is not meant to be called directly.
+  // Fail closed (optional). If you prefer to allow other /u/* paths later, remove this.
+  return {
+    statusCode: 403,
+    statusDescription: "Forbidden",
+    headers: {
+      "cache-control": { value: "no-store" },
+      "content-type": { value: "text/plain; charset=utf-8" }
+    },
+    body: "Forbidden"
+  };
+}
+      `.trim()),
+    });
+
+    // -------------------------
+    // CloudFront Distribution (L1)
     // -------------------------
     const dist = new cloudfront.CfnDistribution(this, 'SiteDistribution', {
       distributionConfig: {
         enabled: true,
-        comment: 'Template (static + sessions + signed-cookie protected /app)',
+        comment: 'Template (static + sessions + signed-cookie protected /app and /u)',
         aliases: [siteDomain],
         defaultRootObject: 'index.html',
         httpVersion: 'http2',
@@ -166,14 +225,23 @@ export class WebStack extends cdk.Stack {
         },
 
         origins: [
-          // Origin 0: S3 (OAC attached)
+          // Origin 0: Site bucket (OAC attached)
           {
-            id: 'S3Origin',
-            domainName: s3DomainName,
+            id: 'SiteS3Origin',
+            domainName: siteS3DomainName,
             originAccessControlId: oac.ref,
-            s3OriginConfig: {}, // OAC replaces OAI
+            s3OriginConfig: {},
           },
-          // Origin 1: API Gateway domain (custom origin)
+
+          // Origin 1: Users bucket (OAC attached)
+          {
+            id: 'UsersS3Origin',
+            domainName: usersS3DomainName,
+            originAccessControlId: oac.ref,
+            s3OriginConfig: {},
+          },
+
+          // Origin 2: API Gateway domain (custom origin)
           {
             id: 'ApiOrigin',
             domainName: apiDomain,
@@ -191,7 +259,7 @@ export class WebStack extends cdk.Stack {
         ],
 
         defaultCacheBehavior: {
-          targetOriginId: 'S3Origin',
+          targetOriginId: 'SiteS3Origin',
           viewerProtocolPolicy: 'redirect-to-https',
           allowedMethods: ['GET', 'HEAD', 'OPTIONS'],
           cachedMethods: ['GET', 'HEAD', 'OPTIONS'],
@@ -227,10 +295,10 @@ export class WebStack extends cdk.Stack {
             compress: true,
           },
 
-          // /app/* -> S3 protected by signed cookies
+          // /app/* -> Site bucket protected by signed cookies
           {
             pathPattern: '/app/*',
-            targetOriginId: 'S3Origin',
+            targetOriginId: 'SiteS3Origin',
             viewerProtocolPolicy: 'redirect-to-https',
             allowedMethods: ['GET', 'HEAD', 'OPTIONS'],
             cachedMethods: ['GET', 'HEAD', 'OPTIONS'],
@@ -240,10 +308,29 @@ export class WebStack extends cdk.Stack {
             compress: true,
           },
 
-          // /config/* -> S3 (no-store)
+          // /u/* -> Users bucket protected by signed cookies + rewrite function
+          {
+            pathPattern: '/u/*',
+            targetOriginId: 'UsersS3Origin',
+            viewerProtocolPolicy: 'redirect-to-https',
+            allowedMethods: ['GET', 'HEAD', 'OPTIONS'],
+            cachedMethods: ['GET', 'HEAD', 'OPTIONS'],
+            cachePolicyId: cacheDisabledId,
+            responseHeadersPolicyId: noStoreSecurityPolicy.responseHeadersPolicyId,
+            trustedKeyGroups: [keyGroup.keyGroupId],
+            compress: true,
+            functionAssociations: [
+              {
+                eventType: 'viewer-request',
+                functionArn: uMeRewriteFn.functionArn,
+              },
+            ],
+          },
+
+          // /config/* -> Site bucket (no-store)
           {
             pathPattern: '/config/*',
-            targetOriginId: 'S3Origin',
+            targetOriginId: 'SiteS3Origin',
             viewerProtocolPolicy: 'redirect-to-https',
             allowedMethods: ['GET', 'HEAD', 'OPTIONS'],
             cachedMethods: ['GET', 'HEAD', 'OPTIONS'],
@@ -256,7 +343,7 @@ export class WebStack extends cdk.Stack {
     });
 
     // -------------------------
-    // Bucket policy (L1) in WebStack => avoids cross-stack cycle
+    // Bucket policy for Site bucket (OAC)
     // -------------------------
     new s3.CfnBucketPolicy(this, 'SiteBucketPolicy', {
       bucket: props.siteBucket.bucketName,
@@ -279,6 +366,30 @@ export class WebStack extends cdk.Stack {
       },
     });
 
+    // -------------------------
+    // Bucket policy for Users bucket (OAC)
+    // -------------------------
+    new s3.CfnBucketPolicy(this, 'UsersBucketPolicy', {
+      bucket: props.usersBucket.bucketName,
+      policyDocument: {
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Sid: 'AllowCloudFrontReadViaOAC',
+            Effect: 'Allow',
+            Principal: { Service: 'cloudfront.amazonaws.com' },
+            Action: 's3:GetObject',
+            Resource: `${props.usersBucket.bucketArn}/*`,
+            Condition: {
+              StringEquals: {
+                'AWS:SourceArn': `arn:aws:cloudfront::${this.account}:distribution/${dist.ref}`,
+              },
+            },
+          },
+        ],
+      },
+    });
+
     // Outputs
     this.distributionId = dist.ref;
     this.distributionDomainName = dist.attrDomainName;
@@ -287,5 +398,6 @@ export class WebStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DistributionId', { value: dist.ref });
     new cdk.CfnOutput(this, 'OacId', { value: oac.ref });
     new cdk.CfnOutput(this, 'KeyGroupId', { value: keyGroup.keyGroupId });
+    new cdk.CfnOutput(this, 'URewriteFunctionArn', { value: uMeRewriteFn.functionArn });
   }
 }

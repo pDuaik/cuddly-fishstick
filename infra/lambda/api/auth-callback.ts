@@ -2,7 +2,7 @@
 // CommonJS-compatible Lambda export: handler: "auth_callback.handler"
 
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import crypto from 'crypto';
 
 import {
@@ -15,7 +15,8 @@ import {
   resp,
   buildCookie,
   loadPrivateKeyFromSecrets,
-  buildPolicy,
+  // 👇 switch to multi-resource policy builder
+  buildPolicyMulti,
   signPolicyRsaSha1,
   cfB64,
 } from './helpers';
@@ -31,12 +32,17 @@ export async function handler(event: any) {
   const returnedState = (qs.state ?? '').toString();
   if (!code) return resp(400, 'Missing ?code');
 
-  const tableName = requireEnv('SESSIONS_TABLE_NAME');
+  // Tables
+  const sessionsTableName = requireEnv('SESSIONS_TABLE_NAME');
+  const userProfileTableName = requireEnv('USER_PROFILE_TABLE_NAME');
 
   const cookieName = env('COOKIE_NAME', 'session') || 'session';
 
   const csrfCookieName = env('CSRF_COOKIE_NAME', '__Host-csrf') || '__Host-csrf';
   const csrfHeaderName = env('CSRF_HEADER_NAME', 'X-CSRF-Token') || 'X-CSRF-Token';
+
+  // Opaque user key cookie (stable per user, NOT Cognito sub)
+  const opaqueCookieName = env('OPAQUE_ID_COOKIE_NAME', '__Host-uk') || '__Host-uk';
 
   const cognitoDomain = requireEnv('COGNITO_DOMAIN');
   const clientId = requireEnv('COGNITO_CLIENT_ID');
@@ -58,8 +64,11 @@ export async function handler(event: any) {
   const cfCookiePath = env('CF_COOKIE_PATH', '/') || '/';
   const cfCookieTtlSeconds = Number.parseInt(env('CF_COOKIE_TTL_SECONDS', String(ttlSeconds)), 10) || ttlSeconds;
 
-  // required: sign only for /app/*
+  // REQUIRED: sign resources (now multi-resource)
+  // e.g. CF_APP_RESOURCE=https://example.com/app/*
+  //      CF_U_RESOURCE=https://example.com/u/*
   const cfAppResource = requireEnv('CF_APP_RESOURCE');
+  const cfUResource = requireEnv('CF_U_RESOURCE');
 
   const appHost = (() => {
     try {
@@ -99,6 +108,9 @@ export async function handler(event: any) {
   const rawPostLogin = getCookie(event, postLoginCookieName) || '';
   const postLoginRedirect = safePostLoginRedirect(rawPostLogin, defaultPostLogin, appHost || '');
 
+  // ------------------------------------------------------------
+  // Exchange code for tokens
+  // ------------------------------------------------------------
   const tokenUrl = `https://${cognitoDomain}/oauth2/token`;
   const form = new URLSearchParams({
     grant_type: 'authorization_code',
@@ -143,9 +155,52 @@ export async function handler(event: any) {
   const expiresAt = now + ttlSeconds;
   const sessionId = crypto.randomUUID().replace(/-/g, '');
 
+  // ------------------------------------------------------------
+  // Ensure opaque_id exists for this user (stable)
+  // PK: user_sub, attribute: opaque_id
+  // ------------------------------------------------------------
+  let opaqueId = '';
+  try {
+    const got = await ddb.send(
+      new GetCommand({
+        TableName: userProfileTableName,
+        Key: { user_sub: userSub },
+        ProjectionExpression: 'opaque_id',
+      }),
+    );
+
+    opaqueId = (got.Item?.opaque_id as string) || '';
+    if (!opaqueId) {
+      // 256-bit random -> base64url (~43 chars). Stable per user.
+      opaqueId = crypto.randomBytes(32).toString('base64url');
+
+      await ddb.send(
+        new PutCommand({
+          TableName: userProfileTableName,
+          Item: {
+            user_sub: userSub,
+            opaque_id: opaqueId,
+            created_at: now,
+            updated_at: now,
+          },
+          // Optional hardening (recommended): do not overwrite if it already exists
+          // Remove if you don't want conditional behavior yet.
+          ConditionExpression: 'attribute_not_exists(user_sub)',
+        }),
+      );
+    }
+  } catch (e: any) {
+    return resp(502, `Failed to resolve user profile: ${e?.message ?? String(e)}`, {
+      cookies: clearTempCookies(),
+    });
+  }
+
+  // ------------------------------------------------------------
+  // Create session (TTL)
+  // ------------------------------------------------------------
   await ddb.send(
     new PutCommand({
-      TableName: tableName,
+      TableName: sessionsTableName,
       Item: {
         session_id: sessionId,
         user_sub: userSub,
@@ -171,7 +226,18 @@ export async function handler(event: any) {
     }),
   );
 
-  // 2) CSRF cookie (NOT HttpOnly). "__Host-" implies Path=/ and no Domain.
+  // 1b) Opaque user key cookie (HttpOnly, stable per user)
+  cookiesOut.push(
+    buildCookie(opaqueCookieName, opaqueId, {
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Lax',
+      maxAge: ttlSeconds,
+    }),
+  );
+
+  // 2) CSRF cookie (NOT HttpOnly)
   const csrfToken = crypto.randomBytes(32).toString('base64url');
   cookiesOut.push(
     buildCookie(csrfCookieName, csrfToken, {
@@ -194,7 +260,10 @@ export async function handler(event: any) {
     const privateKeyPem = await loadPrivateKeyFromSecrets(cfPrivateKeySecretArn);
 
     const cfExpires = now + cfCookieTtlSeconds;
-    const policyBytes = buildPolicy(cfAppResource, cfExpires);
+
+    // ✅ Multi-resource policy: /app/* AND /u/*
+    const policyBytes = buildPolicyMulti([cfAppResource, cfUResource], cfExpires);
+
     const signatureBytes = signPolicyRsaSha1(privateKeyPem, policyBytes);
 
     const cfPolicy = cfB64(policyBytes);
@@ -209,7 +278,6 @@ export async function handler(event: any) {
       maxAge: cfCookieTtlSeconds,
     };
 
-    // Cookie name stays CloudFront-Key-Pair-Id, value is the Public Key ID (Key Groups).
     cookiesOut.push(buildCookie('CloudFront-Key-Pair-Id', cfPublicKeyId, cfAttrs));
     cookiesOut.push(buildCookie('CloudFront-Policy', cfPolicy, cfAttrs));
     cookiesOut.push(buildCookie('CloudFront-Signature', cfSignature, cfAttrs));
@@ -219,7 +287,6 @@ export async function handler(event: any) {
       message: e?.message,
       code: e?.code,
       stack: e?.stack?.split('\n').slice(0, 3).join('\n'),
-      // AWS SDK v3 errors sometimes include metadata
       httpStatus: e?.$metadata?.httpStatusCode,
       requestId: e?.$metadata?.requestId,
     });

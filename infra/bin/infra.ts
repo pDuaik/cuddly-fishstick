@@ -17,7 +17,6 @@ import {
 const app = new cdk.App();
 
 const { settingsAbs } = settingsPath();
-
 const settings = readSettingsOrThrow(settingsAbs);
 
 const config: AppConfig = {
@@ -75,8 +74,14 @@ const auth = new AuthStack(app, `${config.projectName}-${config.stage}-auth`, {
 const api = new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
   env,
   config,
+
+  // Existing tables
   sessionsTable: data.sessionsTable,
   exampleTable: data.exampleTable,
+
+  // NEW: user profile/config index table (user_sub -> opaque_id)
+  userProfileTable: data.userProfileTable,
+
   cognitoDomain: auth.cognitoAuthDomain,
   cognitoClientId: auth.userPoolClient.userPoolClientId,
 
@@ -95,10 +100,7 @@ const api = new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
 
 const apiDomainName = cdk.Fn.select(
   0,
-  cdk.Fn.split(
-    '/',
-    cdk.Fn.select(1, cdk.Fn.split('://', api.httpApi.apiEndpoint)),
-  ),
+  cdk.Fn.split('/', cdk.Fn.select(1, cdk.Fn.split('://', api.httpApi.apiEndpoint))),
 );
 
 new WebStack(app, `${config.projectName}-${config.stage}-web`, {
@@ -109,7 +111,9 @@ new WebStack(app, `${config.projectName}-${config.stage}-web`, {
 
   certArnUsEast1: config.certArnUsEast1,
 
+  // ✅ S3 origins
   siteBucket: data.siteBucket,
+  usersBucket: data.usersBucket,
 
   // ✅ API hostname only (no https://)
   apiDomain: apiDomainName,

@@ -1,3 +1,4 @@
+// lib/api-stack.ts
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
@@ -22,6 +23,9 @@ export interface ApiStackProps extends cdk.StackProps {
   sessionsTable: dynamodb.ITable;
   exampleTable: dynamodb.ITable;
 
+  // NEW: persistent user profile table (user_sub -> opaque_id)
+  userProfileTable: dynamodb.ITable;
+
   cognitoDomain: string;
   cognitoClientId: string;
 
@@ -33,7 +37,6 @@ export interface ApiStackProps extends cdk.StackProps {
   cfCookieTtlSeconds?: number; // default 3600
 
   originVerifyHeaderName: string; // default "X-Origin-Verify"
-
   originVerifyHeaderValueParameterArn: string;
 
   extraApiRoutes?: ExtraApiRoute[];
@@ -73,7 +76,7 @@ export class ApiStack extends cdk.Stack {
     const cfCookiePath = (props.cfCookiePath ?? '/').trim() || '/';
     const cfCookieTtlSeconds = props.cfCookieTtlSeconds ?? 3600;
 
-    // ✅ Only sign for app paths
+    // ✅ Stage 1: still signs /app/* only (you'll update to include /u/* when you update buildPolicy)
     const cfAppResource = `${appBaseUrl}/app/*`;
 
     const cookieNames = {
@@ -82,7 +85,6 @@ export class ApiStack extends cdk.Stack {
       POST_LOGIN_COOKIE_NAME: 'post_login',
     };
 
-    // Repo root is two levels above infra/bin typically; this is resilient from lib/
     const repoRoot = path.resolve(__dirname, '..');
 
     const lambdaDefaults = {
@@ -123,7 +125,13 @@ export class ApiStack extends cdk.Stack {
       entry: path.join(repoRoot, 'lambda', 'api', 'auth-callback.ts'),
       handler: 'handler',
       environment: {
+        // Sessions
         SESSIONS_TABLE_NAME: props.sessionsTable.tableName,
+
+        // NEW: user profile table for opaque id resolution
+        USER_PROFILE_TABLE_NAME: props.userProfileTable.tableName,
+        // optional override if you want to change the cookie name later
+        OPAQUE_ID_COOKIE_NAME: '__Host-uk',
 
         COGNITO_DOMAIN: cognitoDomain,
         COGNITO_CLIENT_ID: cognitoClientId,
@@ -141,9 +149,7 @@ export class ApiStack extends cdk.Stack {
         CF_COOKIE_DOMAIN: cfCookieDomain,
         CF_COOKIE_PATH: cfCookiePath,
 
-        // ✅ Only app resource is passed now
         CF_APP_RESOURCE: cfAppResource,
-
         CF_COOKIE_TTL_SECONDS: String(cfCookieTtlSeconds),
 
         CSRF_COOKIE_NAME: '__Host-csrf',
@@ -153,7 +159,10 @@ export class ApiStack extends cdk.Stack {
         ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
+
+    // DynamoDB permissions
     props.sessionsTable.grantReadWriteData(authCallbackFn);
+    props.userProfileTable.grantReadWriteData(authCallbackFn); // 👈 NEW
 
     // CloudFront private key (Secrets Manager)
     authCallbackFn.addToRolePolicy(
@@ -173,7 +182,6 @@ export class ApiStack extends cdk.Stack {
         COOKIE_NAME: 'session',
         CSRF_COOKIE_NAME: '__Host-csrf',
 
-        // must match /auth/start cookie Path
         AUTH_COOKIE_PATH: '/auth',
 
         ...cookieNames,
@@ -244,12 +252,10 @@ export class ApiStack extends cdk.Stack {
         ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
-
     props.exampleTable.grantReadWriteData(exampleCsrfCallFn);
 
     // ---------------------------------------------------------------------
     // IAM: allow lambdas to read SSM Parameter Store value
-    // We accept a full parameter ARN in settings; easiest is to allow GetParameter on that ARN.
     // ---------------------------------------------------------------------
     const allowReadOriginVerifyParam = (fn: lambda.Function) => {
       fn.addToRolePolicy(
@@ -320,12 +326,10 @@ export class ApiStack extends cdk.Stack {
 
       if (!routePath.startsWith('/api/')) throw new Error(`extraApiRoutes path must start with "/api/": ${routePath}`);
       if (routePath.startsWith('/auth/')) throw new Error(`extraApiRoutes cannot register under "/auth/": ${routePath}`);
-      if (!lambdaArn.startsWith('arn:aws:lambda:'))
-        throw new Error(`extraApiRoutes lambdaArn must be a Lambda ARN: ${lambdaArn}`);
+      if (!lambdaArn.startsWith('arn:aws:lambda:')) throw new Error(`extraApiRoutes lambdaArn must be a Lambda ARN: ${lambdaArn}`);
 
       const allowed = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD']);
-      if (!allowed.has(methodRaw))
-        throw new Error(`extraApiRoutes method not allowed: ${methodRaw} (path: ${routePath})`);
+      if (!allowed.has(methodRaw)) throw new Error(`extraApiRoutes method not allowed: ${methodRaw} (path: ${routePath})`);
 
       const fn = lambda.Function.fromFunctionArn(this, `ExtraFn${this.sanitizeId(routePath)}${methodRaw}`, lambdaArn);
       const integration = new apigwv2Integrations.HttpLambdaIntegration(
