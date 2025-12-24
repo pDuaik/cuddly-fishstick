@@ -142,11 +142,11 @@ export class WebStack extends cdk.Stack {
     const usersS3DomainName = props.usersBucket.bucketRegionalDomainName;
 
     // -------------------------
-    // CloudFront Function: rewrite /u/me/* -> /u/uk/<opaque>/*
-    // and deny direct /u/uk/* (publicly)
+    // CloudFront Function: rewrite /u/me/* -> /u/<opaque>/*
+    // and deny direct /u/<opaque>/* (forces callers to use /u/me/*)
     // -------------------------
     const uMeRewriteFn = new cloudfront.Function(this, 'UPathRewriteFn', {
-      comment: 'Rewrite /u/me/* to /u/uk/<__Host-uk>/*; deny direct /u/uk/*',
+      comment: 'Rewrite /u/me/* to /u/<__Host-uk>/*; deny direct /u/<opaque>/*',
       code: cloudfront.FunctionCode.fromInline(`
 function handler(event) {
   var req = event.request;
@@ -155,8 +155,9 @@ function handler(event) {
   // Only care about /u/*
   if (uri.indexOf("/u/") !== 0) return req;
 
-  // Deny direct access to /u/uk/* (forces callers to use /u/me/*)
-  if (uri.indexOf("/u/uk/") === 0) {
+  // Only /u/me/* is allowed from the viewer.
+  // Everything else under /u/* is forbidden (prevents guessing /u/<opaque>/...).
+  if (uri.indexOf("/u/me/") !== 0) {
     return {
       statusCode: 403,
       statusDescription: "Forbidden",
@@ -168,43 +169,27 @@ function handler(event) {
     };
   }
 
-  // Rewrite /u/me/* -> /u/uk/<cookie>/*
-  if (uri.indexOf("/u/me/") === 0) {
-    var cookieHeader = (req.headers && req.headers.cookie && req.headers.cookie.value) ? req.headers.cookie.value : "";
-    var opaque = "";
+  // Rewrite /u/me/* -> /u/<cookie>/*
+  var cookieHeader = (req.headers && req.headers.cookie && req.headers.cookie.value) ? req.headers.cookie.value : "";
+  var opaque = "";
 
-    // Simple cookie parse (avoid heavy logic; CloudFront Functions are constrained)
-    // Prefer __Host-uk, fallback to uk if you ever change name.
-    var parts = cookieHeader.split(";");
-    for (var i = 0; i < parts.length; i++) {
-      var p = parts[i].trim();
-      if (p.indexOf("__Host-uk=") === 0) { opaque = p.substring("__Host-uk=".length); break; }
-      if (!opaque && p.indexOf("uk=") === 0) { opaque = p.substring("uk=".length); }
-    }
-
-    // If missing, don't rewrite. The request will 404 in the users bucket,
-    // and the page will fall back to base.css.
-    if (!opaque) return req;
-
-    // Keep remainder after /u/me/
-    var rest = uri.substring("/u/me/".length);
-    req.uri = "/u/uk/" + opaque + "/" + rest;
-    return req;
+  // Simple cookie parse
+  var parts = cookieHeader.split(";");
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i].trim();
+    if (p.indexOf("__Host-uk=") === 0) { opaque = p.substring("__Host-uk=".length); break; }
+    if (!opaque && p.indexOf("uk=") === 0) { opaque = p.substring("uk=".length); }
   }
 
-  // Anything else under /u/* is not meant to be called directly.
-  // Fail closed (optional). If you prefer to allow other /u/* paths later, remove this.
-  return {
-    statusCode: 403,
-    statusDescription: "Forbidden",
-    headers: {
-      "cache-control": { value: "no-store" },
-      "content-type": { value: "text/plain; charset=utf-8" }
-    },
-    body: "Forbidden"
-  };
+  // If missing, don't rewrite: S3 will 404, base theme remains.
+  if (!opaque) return req;
+
+  var rest = uri.substring("/u/me/".length);
+  req.uri = "/u/" + opaque + "/" + rest;
+  return req;
 }
-      `.trim()),
+`.trim()),
+
     });
 
     // -------------------------
