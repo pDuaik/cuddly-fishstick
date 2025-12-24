@@ -152,11 +152,8 @@ function handler(event) {
   var req = event.request;
   var uri = req.uri || "/";
 
-  // Only care about /u/*
   if (uri.indexOf("/u/") !== 0) return req;
 
-  // Only /u/me/* is allowed from the viewer.
-  // Everything else under /u/* is forbidden (prevents guessing /u/<opaque>/...).
   if (uri.indexOf("/u/me/") !== 0) {
     return {
       statusCode: 403,
@@ -169,25 +166,16 @@ function handler(event) {
     };
   }
 
-  // Rewrite /u/me/* -> /u/<cookie>/*
-  var cookieHeader = (req.headers && req.headers.cookie && req.headers.cookie.value) ? req.headers.cookie.value : "";
-  var opaque = "";
+  var cookies = req.cookies || {};
+  var opaque = (cookies["__Host-uk"] && cookies["__Host-uk"].value) ? cookies["__Host-uk"].value : "";
 
-  // Simple cookie parse
-  var parts = cookieHeader.split(";");
-  for (var i = 0; i < parts.length; i++) {
-    var p = parts[i].trim();
-    if (p.indexOf("__Host-uk=") === 0) { opaque = p.substring("__Host-uk=".length); break; }
-    if (!opaque && p.indexOf("uk=") === 0) { opaque = p.substring("uk=".length); }
-  }
-
-  // If missing, don't rewrite: S3 will 404, base theme remains.
   if (!opaque) return req;
 
   var rest = uri.substring("/u/me/".length);
   req.uri = "/u/" + opaque + "/" + rest;
   return req;
 }
+
 `.trim()),
 
     });
