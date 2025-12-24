@@ -74,27 +74,18 @@ const auth = new AuthStack(app, `${config.projectName}-${config.stage}-auth`, {
 const api = new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
   env,
   config,
-
-  // Existing tables
   sessionsTable: data.sessionsTable,
   exampleTable: data.exampleTable,
-
-  // NEW: user profile/config index table (user_sub -> opaque_id)
   userProfileTable: data.userProfileTable,
-
   cognitoDomain: auth.cognitoAuthDomain,
   cognitoClientId: auth.userPoolClient.userPoolClientId,
-
   cfPublicKeyId,
-
   cfPrivateKeySecretArn,
   cfCookieDomain,
   cfCookiePath,
   cfCookieTtlSeconds,
-
   originVerifyHeaderName,
   originVerifyHeaderValueParameterArn,
-
   extraApiRoutes,
 });
 
@@ -105,21 +96,12 @@ const apiDomainName = cdk.Fn.select(
 
 new WebStack(app, `${config.projectName}-${config.stage}-web`, {
   env,
-
-  // ✅ your site domain (CloudFront alias)
   domain: config.domain,
-
   certArnUsEast1: config.certArnUsEast1,
-
-  // ✅ S3 origins
   siteBucket: data.siteBucket,
   usersBucket: data.usersBucket,
-
-  // ✅ API hostname only (no https://)
   apiDomain: apiDomainName,
-
   cfPublicKeyId,
-
   originVerifyHeaderName,
   originVerifyHeaderValueParameterArn,
 });

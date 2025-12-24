@@ -76,10 +76,8 @@ export class ApiStack extends cdk.Stack {
     const cfCookiePath = (props.cfCookiePath ?? '/').trim() || '/';
     const cfCookieTtlSeconds = props.cfCookieTtlSeconds ?? 3600;
 
-    // ✅ Stage 1: sign app and u
-    const cfAppResource = `${appBaseUrl}/app/*`;
-    const cfUResource = `${appBaseUrl}/u/*`;
-
+    // ✅ Stage 1: sign domain
+    const cfResource = `${appBaseUrl}/*`;
 
     const cookieNames = {
       OAUTH_STATE_COOKIE_NAME: 'oauth_state',
@@ -151,8 +149,7 @@ export class ApiStack extends cdk.Stack {
         CF_COOKIE_DOMAIN: cfCookieDomain,
         CF_COOKIE_PATH: cfCookiePath,
 
-        CF_APP_RESOURCE: cfAppResource,
-        CF_U_RESOURCE: cfUResource,
+        CF_APP_RESOURCE: cfResource,
         CF_COOKIE_TTL_SECONDS: String(cfCookieTtlSeconds),
 
         CSRF_COOKIE_NAME: '__Host-csrf',

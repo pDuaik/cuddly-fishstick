@@ -15,8 +15,7 @@ import {
   resp,
   buildCookie,
   loadPrivateKeyFromSecrets,
-  // 👇 switch to multi-resource policy builder
-  buildPolicyMulti,
+  buildPolicy,
   signPolicyRsaSha1,
   cfB64,
 } from './helpers';
@@ -64,11 +63,9 @@ export async function handler(event: any) {
   const cfCookiePath = env('CF_COOKIE_PATH', '/') || '/';
   const cfCookieTtlSeconds = Number.parseInt(env('CF_COOKIE_TTL_SECONDS', String(ttlSeconds)), 10) || ttlSeconds;
 
-  // REQUIRED: sign resources (now multi-resource)
-  // e.g. CF_APP_RESOURCE=https://example.com/app/*
-  //      CF_U_RESOURCE=https://example.com/u/*
+  // REQUIRED: sign resources
+  // e.g. CF_APP_RESOURCE=https://example.com/*
   const cfAppResource = requireEnv('CF_APP_RESOURCE');
-  const cfUResource = requireEnv('CF_U_RESOURCE');
 
   const appHost = (() => {
     try {
@@ -262,7 +259,7 @@ export async function handler(event: any) {
     const cfExpires = now + cfCookieTtlSeconds;
 
     // ✅ Multi-resource policy: /app/* AND /u/*
-    const policyBytes = buildPolicyMulti([cfAppResource, cfUResource], cfExpires);
+    const policyBytes = buildPolicy(cfAppResource, cfExpires);
 
     const signatureBytes = signPolicyRsaSha1(privateKeyPem, policyBytes);
 

@@ -205,31 +205,14 @@ export function buildPolicy(resource: string, expiresEpoch: number): Buffer {
     Statement: [
       {
         Resource: resource,
-        Condition: { DateLessThan: { 'AWS:EpochTime': expiresEpoch } },
+        Condition: {
+          DateLessThan: { 'AWS:EpochTime': expiresEpoch },
+        },
       },
     ],
   };
-  return Buffer.from(JSON.stringify(policy), 'utf8');
+  return Buffer.from(JSON.stringify(policy));
 }
-
-export function buildPolicyMulti(resources: string[], expiresEpochSeconds: number): Buffer {
-  const items = (resources ?? []).map(r => (r ?? '').trim()).filter(Boolean);
-  if (items.length === 0) throw new Error('buildPolicyMulti: at least one resource is required');
-
-  const policyObj = {
-    Statement: items.map((res) => ({
-      Resource: res,
-      Condition: {
-        DateLessThan: { 'AWS:EpochTime': expiresEpochSeconds },
-      },
-    })),
-  };
-
-  return Buffer.from(JSON.stringify(policyObj), 'utf8');
-}
-
-
-// helpers.ts (only the updated functions below)
 
 export function env(name: string, fallback = ''): string {
   const v = (process.env[name] ?? '').trim();
