@@ -10,6 +10,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as path from 'path';
 import type { AppConfig } from './config';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 
 export type ExtraApiRoute = {
   path: string; // must start with /api/
@@ -23,7 +24,7 @@ export interface ApiStackProps extends cdk.StackProps {
   sessionsTable: dynamodb.ITable;
   exampleTable: dynamodb.ITable;
 
-  // NEW: persistent user profile table (user_sub -> opaque_id)
+  usersBucket: s3.IBucket;
   userProfileTable: dynamodb.ITable;
 
   cognitoDomain: string;
@@ -254,6 +255,25 @@ export class ApiStack extends cdk.Stack {
     });
     props.exampleTable.grantReadWriteData(exampleCsrfCallFn);
 
+    const updateThemeFn = new NodejsFunction(this, 'UpdateThemeFn', {
+      ...lambdaDefaults,
+      timeout: cdk.Duration.seconds(10),
+      entry: path.join(repoRoot, 'lambda', 'api', 'update-theme.ts'),
+      handler: 'handler',
+      environment: {
+        USER_PROFILE_TABLE_NAME: props.userProfileTable.tableName,
+        USERS_BUCKET_NAME: props.usersBucket.bucketName,
+
+        CSRF_COOKIE_NAME: '__Host-csrf',
+        CSRF_HEADER_NAME: 'X-CSRF-Token',
+
+        ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
+        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
+      },
+    });
+    props.userProfileTable.grantReadData(updateThemeFn);
+    props.usersBucket.grantPut(updateThemeFn, 'u/*');
+
     // ---------------------------------------------------------------------
     // IAM: allow lambdas to read SSM Parameter Store value
     // ---------------------------------------------------------------------
@@ -273,6 +293,7 @@ export class ApiStack extends cdk.Stack {
     allowReadOriginVerifyParam(meFn);
     allowReadOriginVerifyParam(exampleAuthCallFn);
     allowReadOriginVerifyParam(exampleCsrfCallFn);
+    allowReadOriginVerifyParam(updateThemeFn);
 
     // ---------------------------------------------------------------------
     // HTTP API + Integrations
@@ -285,6 +306,7 @@ export class ApiStack extends cdk.Stack {
     const callbackIntegration = new apigwv2Integrations.HttpLambdaIntegration('CallbackIntegration', authCallbackFn);
     const logoutIntegration = new apigwv2Integrations.HttpLambdaIntegration('LogoutIntegration', authLogoutFn);
     const meIntegration = new apigwv2Integrations.HttpLambdaIntegration('MeIntegration', meFn);
+    const updateThemeIntegration = new apigwv2Integrations.HttpLambdaIntegration('UpdateThemeIntegration', updateThemeFn);
 
     const authorizer = new apigwv2Authorizers.HttpLambdaAuthorizer('SessionAuthorizer', sessionAuthorizerFn, {
       responseTypes: [apigwv2Authorizers.HttpLambdaResponseType.SIMPLE],
@@ -313,6 +335,13 @@ export class ApiStack extends cdk.Stack {
       path: '/api/me',
       methods: [apigwv2.HttpMethod.GET],
       integration: meIntegration,
+      authorizer,
+    });
+
+    this.httpApi.addRoutes({
+      path: '/api/theme',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: updateThemeIntegration,
       authorizer,
     });
 

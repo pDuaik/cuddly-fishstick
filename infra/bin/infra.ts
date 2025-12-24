@@ -77,6 +77,7 @@ const api = new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
   sessionsTable: data.sessionsTable,
   exampleTable: data.exampleTable,
   userProfileTable: data.userProfileTable,
+  usersBucket: data.usersBucket,
   cognitoDomain: auth.cognitoAuthDomain,
   cognitoClientId: auth.userPoolClient.userPoolClientId,
   cfPublicKeyId,
