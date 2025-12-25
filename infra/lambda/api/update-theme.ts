@@ -20,6 +20,14 @@ type AuthedEvent = APIGatewayProxyEventV2 & {
   };
 };
 
+function normalizePadding(input: string, min: number, max: number): string | null {
+  const v = String(input ?? '').trim().toLowerCase();
+  if (!/^\d+px$/.test(v)) return null;
+  const n = Number(v.replace('px', ''));
+  if (!Number.isFinite(n) || n < min || n > max) return null;
+  return `${n}px`;
+}
+
 function requireAuthorizer(event: AuthedEvent) {
   const ctx = event.requestContext?.authorizer?.lambda;
   if (!ctx?.session_id || !ctx?.user_sub) return null;
@@ -76,7 +84,20 @@ function validateThemeVars(input: any): { ok: true; vars: ThemeVars } | { ok: fa
   const raw = input?.vars && typeof input.vars === 'object' ? input.vars : input;
   if (!raw || typeof raw !== 'object') return { ok: false, message: 'Expected JSON body like: { "vars": { ... } }' };
 
-  const out: ThemeVars = {};
+  const out: ThemeVars = {}; // ✅ declare first
+
+  // Button padding
+  if (raw.btnPadX != null && raw.btnPadX !== '') {
+    const v = normalizePadding(raw.btnPadX, 0, 32);
+    if (!v) return { ok: false, message: 'Invalid btnPadX. Use "Npx" (0–32px).' };
+    out['--btn-pad-x'] = v;
+  }
+
+  if (raw.btnPadY != null && raw.btnPadY !== '') {
+    const v = normalizePadding(raw.btnPadY, 0, 16);
+    if (!v) return { ok: false, message: 'Invalid btnPadY. Use "Npx" (0–16px).' };
+    out['--btn-pad-y'] = v;
+  }
 
   // Allowlist mapping: API key -> CSS var name
   const COLOR_KEYS: Record<string, string> = {
@@ -88,10 +109,6 @@ function validateThemeVars(input: any): { ok: true; vars: ThemeVars } | { ok: fa
     primaryHover: '--primary-hover',
     primaryActive: '--primary-active',
     btnLabel: '--btn-label',
-
-    // Optional: if you want them editable as hex too, switch your base to hex for these vars
-    // border: '--border',
-    // ring: '--ring',
   };
 
   for (const [k, cssVar] of Object.entries(COLOR_KEYS)) {

@@ -5,6 +5,7 @@ AWS serverless web application focused on security hardening, Well-Architected b
 1) Session TTL 10 minutes.
 2) Auto-refresh cookies.
 3) Update html real time
+4) Create error page and make cloudfront route users to things like not authorized or filed or missing page.
 
 # Project Philosophy
 
