@@ -20,6 +20,14 @@ type AuthedEvent = APIGatewayProxyEventV2 & {
   };
 };
 
+function normalizeRadius(input: string, min: number, max: number): string | null {
+  const v = String(input ?? '').trim().toLowerCase();
+  if (!/^\d+px$/.test(v)) return null;
+  const n = Number(v.replace('px', ''));
+  if (!Number.isFinite(n) || n < min || n > max) return null;
+  return `${n}px`;
+}
+
 function normalizePadding(input: string, min: number, max: number): string | null {
   const v = String(input ?? '').trim().toLowerCase();
   if (!/^\d+px$/.test(v)) return null;
@@ -97,6 +105,12 @@ function validateThemeVars(input: any): { ok: true; vars: ThemeVars } | { ok: fa
     const v = normalizePadding(raw.btnPadY, 0, 16);
     if (!v) return { ok: false, message: 'Invalid btnPadY. Use "Npx" (0–16px).' };
     out['--btn-pad-y'] = v;
+  }
+
+  if (raw.btnRadius != null && raw.btnRadius !== '') {
+    const v = normalizeRadius(raw.btnRadius, 0, 24);
+    if (!v) return { ok: false, message: 'Invalid btnRadius. Use "Npx" (0–24px).' };
+    out['--btn-radius'] = v;
   }
 
   // Allowlist mapping: API key -> CSS var name
