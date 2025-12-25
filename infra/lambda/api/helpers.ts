@@ -121,7 +121,7 @@ export function resp(statusCode: number, body: string, opts?: RespOpts) {
   return {
     statusCode,
     headers: {
-      'content-type': 'text/plain',
+      'content-type': 'text/plain; charset=utf-8',
       'cache-control': 'no-store',
       ...(opts?.headers ?? {}),
     },
@@ -134,7 +134,7 @@ export function json(statusCode: number, obj: unknown, opts?: RespOpts) {
   return {
     statusCode,
     headers: {
-      'content-type': 'application/json',
+      'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-store',
       ...(opts?.headers ?? {}),
     },

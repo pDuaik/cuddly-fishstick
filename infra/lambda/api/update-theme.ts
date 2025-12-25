@@ -27,8 +27,8 @@ function requireAuthorizer(event: AuthedEvent) {
 }
 
 function enforceCsrf(event: AuthedEvent): { ok: true } | { ok: false; statusCode: number; message: string } {
-  const cookieName = requireEnv('CSRF_COOKIE_NAME'); // "__Host-csrf"
-  const headerName = requireEnv('CSRF_HEADER_NAME'); // "X-CSRF-Token"
+  const cookieName = requireEnv('CSRF_COOKIE_NAME');
+  const headerName = requireEnv('CSRF_HEADER_NAME');
 
   const tokenCookie = getCookie(event, cookieName);
   const tokenHeader = getHeader(event, headerName);
@@ -51,25 +51,102 @@ function parseBody(event: AuthedEvent): any {
 function normalizeHexColor(input: string): string | null {
   const v = (input ?? '').trim();
   if (!v) return null;
-  // allow "#RRGGBB" only (keep it strict)
   if (!/^#[0-9a-fA-F]{6}$/.test(v)) return null;
   return v.toLowerCase();
 }
 
+function normalizePx(input: string, min: number, max: number): string | null {
+  const v = String(input ?? '').trim().toLowerCase();
+  if (!/^\d+px$/.test(v)) return null;
+  const n = Number(v.replace('px', ''));
+  if (!Number.isFinite(n) || n < min || n > max) return null;
+  return `${n}px`;
+}
+
+// Keep shadow safe by using presets (recommended)
+const SHADOW_PRESETS: Record<string, string> = {
+  soft: '0 18px 50px rgba(0,0,0,0.28)',
+  medium: '0 18px 50px rgba(0,0,0,0.35)',
+  strong: '0 22px 70px rgba(0,0,0,0.42)',
+};
+
+type ThemeVars = Record<string, string>;
+
+function validateThemeVars(input: any): { ok: true; vars: ThemeVars } | { ok: false; message: string } {
+  const raw = input?.vars && typeof input.vars === 'object' ? input.vars : input;
+  if (!raw || typeof raw !== 'object') return { ok: false, message: 'Expected JSON body like: { "vars": { ... } }' };
+
+  const out: ThemeVars = {};
+
+  // Allowlist mapping: API key -> CSS var name
+  const COLOR_KEYS: Record<string, string> = {
+    bg: '--bg',
+    cardBg: '--card-bg',
+    text: '--text',
+    muted: '--muted',
+    primary: '--primary',
+    primaryHover: '--primary-hover',
+    primaryActive: '--primary-active',
+    btnLabel: '--btn-label',
+
+    // Optional: if you want them editable as hex too, switch your base to hex for these vars
+    // border: '--border',
+    // ring: '--ring',
+  };
+
+  for (const [k, cssVar] of Object.entries(COLOR_KEYS)) {
+    if (raw[k] == null || raw[k] === '') continue;
+    const c = normalizeHexColor(String(raw[k]));
+    if (!c) return { ok: false, message: `Invalid ${k}. Use "#RRGGBB".` };
+    out[cssVar] = c;
+  }
+
+  // Radius and page padding
+  if (raw.radius != null && raw.radius !== '') {
+    const v = normalizePx(String(raw.radius), 0, 32);
+    if (!v) return { ok: false, message: 'Invalid radius. Use "Npx" (0–32px).' };
+    out['--radius'] = v;
+  }
+
+  if (raw.pagePad != null && raw.pagePad !== '') {
+    const v = normalizePx(String(raw.pagePad), 0, 64);
+    if (!v) return { ok: false, message: 'Invalid pagePad. Use "Npx" (0–64px).' };
+    out['--page-pad'] = v;
+  }
+
+  // Shadow preset
+  if (raw.shadowPreset != null && raw.shadowPreset !== '') {
+    const key = String(raw.shadowPreset).trim().toLowerCase();
+    const preset = SHADOW_PRESETS[key];
+    if (!preset) return { ok: false, message: `Invalid shadowPreset. Use one of: ${Object.keys(SHADOW_PRESETS).join(', ')}` };
+    out['--shadow'] = preset;
+  }
+
+  if (Object.keys(out).length === 0) {
+    return { ok: false, message: 'No valid theme variables provided.' };
+  }
+
+  return { ok: true, vars: out };
+}
+
+function renderThemeCss(vars: ThemeVars): string {
+  // Stable order helps diffs/debugging
+  const lines = Object.keys(vars)
+    .sort()
+    .map((k) => `  ${k}: ${vars[k]};`);
+  return `:root {\n${lines.join('\n')}\n}\n`;
+}
+
 export async function handler(event: AuthedEvent): Promise<APIGatewayProxyResultV2> {
-  // 1) CloudFront-only
   const ov = await enforceOriginVerify(event);
   if (!ov.ok) return json(ov.statusCode, { ok: false, message: ov.message });
 
-  // 2) Session authorizer
   const authed = requireAuthorizer(event);
   if (!authed) return json(401, { ok: false, message: 'Unauthorized' });
 
-  // 3) CSRF
   const csrf = enforceCsrf(event);
   if (!csrf.ok) return json(csrf.statusCode, { ok: false, message: csrf.message });
 
-  // 4) Parse + validate input
   let body: any = {};
   try {
     body = parseBody(event);
@@ -77,12 +154,9 @@ export async function handler(event: AuthedEvent): Promise<APIGatewayProxyResult
     return json(400, { ok: false, message: e?.message ?? 'Invalid JSON body' });
   }
 
-  const bg = normalizeHexColor(String(body?.bg ?? body?.background ?? ''));
-  if (!bg) {
-    return json(400, { ok: false, message: 'Expected JSON body like: { "bg": "#32a852" }' });
-  }
+  const validated = validateThemeVars(body);
+  if (!validated.ok) return json(400, { ok: false, message: validated.message });
 
-  // 5) Resolve opaque id from user profile table
   const profileTable = requireEnv('USER_PROFILE_TABLE_NAME');
   const got = await ddb.send(
     new GetCommand({
@@ -95,11 +169,10 @@ export async function handler(event: AuthedEvent): Promise<APIGatewayProxyResult
   const opaqueId = String(got.Item?.opaque_id ?? '');
   if (!opaqueId) return json(500, { ok: false, message: 'User profile missing opaque_id' });
 
-  // 6) Write CSS to S3 (create/replace)
   const bucket = requireEnv('USERS_BUCKET_NAME');
   const key = `u/${opaqueId}/theme.css`;
 
-  const css = `:root { --bg: ${bg}; }\n`;
+  const css = renderThemeCss(validated.vars);
 
   await s3.send(
     new PutObjectCommand({
@@ -114,6 +187,6 @@ export async function handler(event: AuthedEvent): Promise<APIGatewayProxyResult
   return json(200, {
     ok: true,
     key,
-    bg,
+    vars: validated.vars,
   });
 }

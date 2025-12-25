@@ -1,6 +1,11 @@
 # cuddly-fishstick
 AWS serverless web application focused on security hardening, Well-Architected best practices, and cost-effective design.
 
+# Roadmap
+1) Session TTL 10 minutes.
+2) Auto-refresh cookies.
+3) Update html real time
+
 # Project Philosophy
 
 This project prioritizes correct security boundaries, least privilege, and fail-closed behavior from the start.
