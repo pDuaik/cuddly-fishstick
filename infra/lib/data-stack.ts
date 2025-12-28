@@ -17,8 +17,6 @@ export class DataStack extends cdk.Stack {
   public readonly siteBucket: s3.Bucket;
   public readonly usersBucket: s3.Bucket;
 
-  public readonly exampleTable: dynamodb.Table;
-
   constructor(scope: Construct, id: string, props: DataStackProps) {
     super(scope, id, props);
 
@@ -43,16 +41,6 @@ export class DataStack extends cdk.Stack {
     this.userProfileTable = new dynamodb.Table(this, 'UserProfileTable', {
       tableName: `${projectName}-${stage}-user-profile`,
       partitionKey: { name: 'user_sub', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy,
-    });
-
-    // -------------------------
-    // DynamoDB: demo counter (CSRF POST example)
-    // -------------------------
-    this.exampleTable = new dynamodb.Table(this, 'ExampleTable', {
-      tableName: `${projectName}-${stage}-example`,
-      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy,
     });
@@ -87,7 +75,9 @@ export class DataStack extends cdk.Stack {
       autoDeleteObjects: removalPolicy === cdk.RemovalPolicy.DESTROY,
     });
 
+    // -------------------------
     // Outputs
+    // -------------------------
     new cdk.CfnOutput(this, 'SessionsTableName', { value: this.sessionsTable.tableName });
     new cdk.CfnOutput(this, 'SessionsTableArn', { value: this.sessionsTable.tableArn });
 
@@ -99,8 +89,5 @@ export class DataStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'UsersBucketName', { value: this.usersBucket.bucketName });
     new cdk.CfnOutput(this, 'UsersBucketArn', { value: this.usersBucket.bucketArn });
-
-    new cdk.CfnOutput(this, 'DemoTableName', { value: this.exampleTable.tableName });
-    new cdk.CfnOutput(this, 'DemoTableArn', { value: this.exampleTable.tableArn });
   }
 }

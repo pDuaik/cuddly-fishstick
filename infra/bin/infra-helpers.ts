@@ -1,7 +1,7 @@
+// infra/bin/infra-helpers.ts
 import * as fs from 'fs';
 import * as path from 'path';
 import type * as cdk from 'aws-cdk-lib';
-import type { ExtraApiRoute } from '../lib/api-stack';
 
 export type SettingsFile = {
   projectName?: string;
@@ -21,14 +21,7 @@ export type SettingsFile = {
 
   originVerifyHeaderName?: string;
   originVerifyHeaderValueParameterArn: string;
-
-  extraApiRoutes?: {
-    path: string;
-    method: string;
-    lambdaArn: string;
-  }[];
 };
-
 
 export function ctx(app: cdk.App, key: string): string {
   return (app.node.tryGetContext(key) ?? '').toString().trim();
@@ -66,32 +59,9 @@ export function readSettingsOrThrow(settingsAbsPath: string): SettingsFile {
   }
 }
 
-export function normalizeExtraRoutes(input?: SettingsFile['extraApiRoutes']): ExtraApiRoute[] {
-  const routes = input ?? [];
-  if (!Array.isArray(routes)) return [];
-
-  return routes.map((r, i) => {
-    if (!r || typeof r !== 'object') throw new Error(`extraApiRoutes[${i}] must be an object`);
-
-    const p = (r.path ?? '').toString().trim();
-    const m = (r.method ?? '').toString().trim().toUpperCase();
-    const arn = (r.lambdaArn ?? '').toString().trim();
-
-    if (!p.startsWith('/api/')) throw new Error(`extraApiRoutes[${i}].path must start with "/api/": ${p}`);
-    if (p.startsWith('/auth/')) throw new Error(`extraApiRoutes[${i}].path cannot be under "/auth/": ${p}`);
-
-    const allowed = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD']);
-    if (!allowed.has(m)) throw new Error(`extraApiRoutes[${i}].method not allowed: ${m}`);
-
-    if (!arn.startsWith('arn:aws:lambda:')) throw new Error(`extraApiRoutes[${i}].lambdaArn must be a Lambda ARN: ${arn}`);
-
-    return { path: p, method: m, lambdaArn: arn };
-  });
-}
-
 export function settingsPath() {
   const repoRoot = path.resolve(__dirname, '..', '..');
   return {
-    settingsAbs: path.join(repoRoot, 'settings.json')
+    settingsAbs: path.join(repoRoot, 'settings.json'),
   };
 }

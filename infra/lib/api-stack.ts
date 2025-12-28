@@ -1,4 +1,4 @@
-// lib/api-stack.ts
+// infra/lib/api-stack.ts
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
@@ -11,18 +11,13 @@ import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as path from 'path';
 import type { AppConfig } from './config';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-
-export type ExtraApiRoute = {
-  path: string; // must start with /api/
-  method: string; // GET/POST/...
-  lambdaArn: string; // existing lambda ARN
-};
+import type { UserExtensionCtx, UserApiMethod } from './user-extension';
+import * as user from '../user/index';
 
 export interface ApiStackProps extends cdk.StackProps {
   config: AppConfig;
 
   sessionsTable: dynamodb.ITable;
-  exampleTable: dynamodb.ITable;
 
   usersBucket: s3.IBucket;
   userProfileTable: dynamodb.ITable;
@@ -39,8 +34,6 @@ export interface ApiStackProps extends cdk.StackProps {
 
   originVerifyHeaderName: string; // default "X-Origin-Verify"
   originVerifyHeaderValueParameterArn: string;
-
-  extraApiRoutes?: ExtraApiRoute[];
 }
 
 export class ApiStack extends cdk.Stack {
@@ -99,6 +92,18 @@ export class ApiStack extends cdk.Stack {
     } as const;
 
     // ---------------------------------------------------------------------
+    // IAM: allow lambdas to read SSM Parameter Store value
+    // ---------------------------------------------------------------------
+    const allowReadOriginVerifyParam = (fn: lambda.Function) => {
+      fn.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['ssm:GetParameter'],
+          resources: [originVerifyHeaderValueParameterArn],
+        }),
+      );
+    };
+
+    // ---------------------------------------------------------------------
     // Core lambdas (bundled from TS)
     // ---------------------------------------------------------------------
 
@@ -119,6 +124,7 @@ export class ApiStack extends cdk.Stack {
         ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
+    allowReadOriginVerifyParam(authStartFn);
 
     const authCallbackFn = new NodejsFunction(this, 'AuthCallbackFn', {
       ...lambdaDefaults,
@@ -129,7 +135,7 @@ export class ApiStack extends cdk.Stack {
         // Sessions
         SESSIONS_TABLE_NAME: props.sessionsTable.tableName,
 
-        // NEW: user profile table for opaque id resolution
+        // user profile table for opaque id resolution
         USER_PROFILE_TABLE_NAME: props.userProfileTable.tableName,
         // optional override if you want to change the cookie name later
         OPAQUE_ID_COOKIE_NAME: '__Host-uk',
@@ -160,6 +166,7 @@ export class ApiStack extends cdk.Stack {
         ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
+    allowReadOriginVerifyParam(authCallbackFn);
 
     // DynamoDB permissions
     props.sessionsTable.grantReadWriteData(authCallbackFn);
@@ -199,6 +206,7 @@ export class ApiStack extends cdk.Stack {
         ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
+    allowReadOriginVerifyParam(authLogoutFn);
     props.sessionsTable.grantReadWriteData(authLogoutFn);
 
     const sessionAuthorizerFn = new NodejsFunction(this, 'SessionAuthorizerFn', {
@@ -214,6 +222,7 @@ export class ApiStack extends cdk.Stack {
         ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
+    allowReadOriginVerifyParam(sessionAuthorizerFn);
     props.sessionsTable.grantReadData(sessionAuthorizerFn);
 
     const meFn = new NodejsFunction(this, 'MeFn', {
@@ -226,34 +235,7 @@ export class ApiStack extends cdk.Stack {
         ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
-
-    const exampleAuthCallFn = new NodejsFunction(this, 'ExampleAuthCallFn', {
-      ...lambdaDefaults,
-      timeout: cdk.Duration.seconds(10),
-      entry: path.join(repoRoot, 'lambda', 'api', 'example-auth-call.ts'),
-      handler: 'handler',
-      environment: {
-        ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
-      },
-    });
-
-    const exampleCsrfCallFn = new NodejsFunction(this, 'ExampleCsrfCallFn', {
-      ...lambdaDefaults,
-      timeout: cdk.Duration.seconds(10),
-      entry: path.join(repoRoot, 'lambda', 'api', 'example-csrf-call.ts'),
-      handler: 'handler',
-      environment: {
-        DEMO_TABLE_NAME: props.exampleTable.tableName,
-
-        CSRF_COOKIE_NAME: '__Host-csrf',
-        CSRF_HEADER_NAME: 'X-CSRF-Token',
-
-        ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
-      },
-    });
-    props.exampleTable.grantReadWriteData(exampleCsrfCallFn);
+    allowReadOriginVerifyParam(meFn);
 
     const updateThemeFn = new NodejsFunction(this, 'UpdateThemeFn', {
       ...lambdaDefaults,
@@ -271,29 +253,9 @@ export class ApiStack extends cdk.Stack {
         ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
       },
     });
+    allowReadOriginVerifyParam(updateThemeFn);
     props.userProfileTable.grantReadData(updateThemeFn);
     props.usersBucket.grantPut(updateThemeFn, 'u/*');
-
-    // ---------------------------------------------------------------------
-    // IAM: allow lambdas to read SSM Parameter Store value
-    // ---------------------------------------------------------------------
-    const allowReadOriginVerifyParam = (fn: lambda.Function) => {
-      fn.addToRolePolicy(
-        new iam.PolicyStatement({
-          actions: ['ssm:GetParameter'],
-          resources: [originVerifyHeaderValueParameterArn],
-        }),
-      );
-    };
-
-    allowReadOriginVerifyParam(authStartFn);
-    allowReadOriginVerifyParam(authCallbackFn);
-    allowReadOriginVerifyParam(authLogoutFn);
-    allowReadOriginVerifyParam(sessionAuthorizerFn);
-    allowReadOriginVerifyParam(meFn);
-    allowReadOriginVerifyParam(exampleAuthCallFn);
-    allowReadOriginVerifyParam(exampleCsrfCallFn);
-    allowReadOriginVerifyParam(updateThemeFn);
 
     // ---------------------------------------------------------------------
     // HTTP API + Integrations
@@ -346,33 +308,108 @@ export class ApiStack extends cdk.Stack {
     });
 
     // ---------------------------------------------------------------------
-    // Extra authenticated endpoints (user-provided Lambda ARNs)
+    // User extension: factory + registrar + discovery
     // ---------------------------------------------------------------------
-    for (const r of props.extraApiRoutes ?? []) {
-      const routePath = (r.path ?? '').trim();
-      const methodRaw = (r.method ?? '').trim().toUpperCase();
-      const lambdaArn = (r.lambdaArn ?? '').trim();
 
-      if (!routePath.startsWith('/api/')) throw new Error(`extraApiRoutes path must start with "/api/": ${routePath}`);
-      if (routePath.startsWith('/auth/')) throw new Error(`extraApiRoutes cannot register under "/auth/": ${routePath}`);
-      if (!lambdaArn.startsWith('arn:aws:lambda:')) throw new Error(`extraApiRoutes lambdaArn must be a Lambda ARN: ${lambdaArn}`);
+    const featuresScope = new Construct(this, 'UserFeatures');
 
-      const allowed = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD']);
-      if (!allowed.has(methodRaw)) throw new Error(`extraApiRoutes method not allowed: ${methodRaw} (path: ${routePath})`);
+    const requiredUserEnv = {
+      ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
+      ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
+      CSRF_COOKIE_NAME: '__Host-csrf',
+      CSRF_HEADER_NAME: 'X-CSRF-Token',
+    } as const;
 
-      const fn = lambda.Function.fromFunctionArn(this, `ExtraFn${this.sanitizeId(routePath)}${methodRaw}`, lambdaArn);
+    const createUserLambda: UserExtensionCtx['lambda']['createUserLambda'] = (input) => {
+      const idRaw = (input?.id ?? '').toString().trim();
+      const entryRaw = (input?.entry ?? '').toString().trim();
+      const handler = (input?.handler ?? 'handler').toString().trim() || 'handler';
+
+      if (!idRaw) throw new Error('createUserLambda: "id" is required.');
+      if (!entryRaw) throw new Error(`createUserLambda(${idRaw}): "entry" is required.`);
+
+      const userEnv = (input.environment ?? {}) as Record<string, string>;
+
+      // user cannot override required vars
+      for (const k of Object.keys(requiredUserEnv)) {
+        if (k in userEnv) {
+          throw new Error(`createUserLambda(${idRaw}): environment cannot override required var "${k}".`);
+        }
+      }
+
+      const fn = new NodejsFunction(featuresScope, idRaw, {
+        ...lambdaDefaults,
+        entry: entryRaw,
+        handler,
+        timeout:
+          typeof input.timeoutSeconds === 'number' && Number.isFinite(input.timeoutSeconds)
+            ? cdk.Duration.seconds(input.timeoutSeconds)
+            : lambdaDefaults.timeout,
+        memorySize:
+          typeof input.memorySizeMb === 'number' && Number.isFinite(input.memorySizeMb)
+            ? input.memorySizeMb
+            : lambdaDefaults.memorySize,
+        environment: {
+          ...userEnv,
+          ...requiredUserEnv,
+        },
+      });
+
+      allowReadOriginVerifyParam(fn);
+
+      return fn;
+    };
+
+    const allowedMethods = new Set<string>(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD']);
+
+    const normalizeMethod = (m: UserApiMethod): apigwv2.HttpMethod => {
+      const s = String(m ?? '').trim().toUpperCase();
+      if (!allowedMethods.has(s)) throw new Error(`registerApiRoute: method not allowed: ${s}`);
+      return s as apigwv2.HttpMethod;
+    };
+
+    const registerApiRoute: UserExtensionCtx['api']['registerApiRoute'] = (input) => {
+      const routePath = (input?.path ?? '').toString().trim();
+
+      if (!routePath.startsWith('/api/')) {
+        throw new Error(`registerApiRoute: path must start with "/api/": ${routePath}`);
+      }
+      if (routePath.startsWith('/auth/')) {
+        throw new Error(`registerApiRoute: cannot register under "/auth/": ${routePath}`);
+      }
+
+      const methodsRaw = input?.methods ?? [];
+      if (!Array.isArray(methodsRaw) || methodsRaw.length === 0) {
+        throw new Error(`registerApiRoute(${routePath}): methods must be a non-empty array.`);
+      }
+
+      const fn = input?.fn;
+      if (!fn) throw new Error(`registerApiRoute(${routePath}): "fn" is required.`);
+
+      const methods = methodsRaw.map(normalizeMethod);
+
       const integration = new apigwv2Integrations.HttpLambdaIntegration(
-        `ExtraIntegration${this.sanitizeId(routePath)}${methodRaw}`,
+        `UserIntegration${this.sanitizeId(routePath)}${methods.join('')}`,
         fn,
       );
 
       this.httpApi.addRoutes({
         path: routePath,
-        methods: [methodRaw as apigwv2.HttpMethod],
+        methods,
         integration,
-        authorizer,
+        authorizer, // ✅ always authenticated
       });
-    }
+    };
+
+    const ctx: UserExtensionCtx = {
+      featuresScope,
+      lambda: { createUserLambda },
+      api: { registerApiRoute },
+      HttpMethod: apigwv2.HttpMethod,
+    };
+
+    // Static import, no scanning. User module should export `register(ctx)`.
+    user.register(ctx);
 
     new cdk.CfnOutput(this, 'ApiEndpoint', { value: this.httpApi.apiEndpoint });
     new cdk.CfnOutput(this, 'HttpApiId', { value: this.httpApi.httpApiId });

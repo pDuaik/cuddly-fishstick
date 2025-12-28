@@ -5,14 +5,7 @@ import { AuthStack } from '../lib/auth-stack';
 import { ApiStack } from '../lib/api-stack';
 import { WebStack } from '../lib/web-stack';
 import type { AppConfig } from '../lib/config';
-import {
-  settingsPath,
-  readSettingsOrThrow,
-  requireValue,
-  normalizeExtraRoutes,
-  ctx,
-  ctxBool,
-} from './infra-helpers';
+import { settingsPath, readSettingsOrThrow, requireValue, ctx, ctxBool } from './infra-helpers';
 
 const app = new cdk.App();
 
@@ -49,8 +42,6 @@ const cfCookieTtlSeconds =
     ? settings.cfCookieTtlSeconds
     : 3600;
 
-const extraApiRoutes = normalizeExtraRoutes(settings.extraApiRoutes);
-
 const env: cdk.Environment = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
   region: process.env.CDK_DEFAULT_REGION,
@@ -75,7 +66,6 @@ const api = new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
   env,
   config,
   sessionsTable: data.sessionsTable,
-  exampleTable: data.exampleTable,
   userProfileTable: data.userProfileTable,
   usersBucket: data.usersBucket,
   cognitoDomain: auth.cognitoAuthDomain,
@@ -87,7 +77,6 @@ const api = new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
   cfCookieTtlSeconds,
   originVerifyHeaderName,
   originVerifyHeaderValueParameterArn,
-  extraApiRoutes,
 });
 
 const apiDomainName = cdk.Fn.select(
