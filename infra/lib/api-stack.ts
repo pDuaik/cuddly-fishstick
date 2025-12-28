@@ -313,6 +313,8 @@ export class ApiStack extends cdk.Stack {
 
     const featuresScope = new Construct(this, 'UserFeatures');
 
+    const PLATFORM_ENV_PREFIX = 'PLATFORM_' as const;
+
     const requiredUserEnv = {
       ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
       ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
@@ -366,10 +368,20 @@ export const handler = secureHttp(business);
 
       const userEnv = (input.environment ?? {}) as Record<string, string>;
 
-      // user cannot override required vars
+      // user cannot override required vars (more direct error)
       for (const k of Object.keys(requiredUserEnv)) {
         if (k in userEnv) {
           throw new Error(`createUserEndpoint(${idRaw}): environment cannot override required var "${k}".`);
+        }
+      }
+
+      // ✅ Step 5: reserve a namespace for platform env vars (future-proofing)
+      for (const k of Object.keys(userEnv)) {
+        if (k.startsWith(PLATFORM_ENV_PREFIX)) {
+          throw new Error(
+            `createUserEndpoint(${idRaw}): environment key "${k}" is not allowed. ` +
+            `Keys starting with "${PLATFORM_ENV_PREFIX}" are reserved for the platform.`,
+          );
         }
       }
 
@@ -434,7 +446,8 @@ export const handler = secureHttp(business);
       const methods = methodsRaw.map(normalizeMethod);
 
       // Make integration id more stable/unique than just path+methods
-      const integrationId = `UserIntegration${this.sanitizeId(fn.node.id)}`;
+      const integrationId =
+        `UserIntegration${this.sanitizeId(routePath)}${methods.join('')}${this.sanitizeId(fn.node.id)}`;
       const integration = new apigwv2Integrations.HttpLambdaIntegration(integrationId, fn);
 
       this.httpApi.addRoutes({
