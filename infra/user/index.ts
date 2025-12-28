@@ -1,8 +1,5 @@
 // infra/user/index.ts
-import * as path from 'path';
 import type { UserExtensionCtx } from '../lib/user-extension';
-
-const repoRoot = path.resolve(__dirname, '..');
 
 export function register(ctx: UserExtensionCtx): void {
   // ------------------------------------------------------------
@@ -10,7 +7,7 @@ export function register(ctx: UserExtensionCtx): void {
   // ------------------------------------------------------------
   const pingFn = ctx.endpoint.createUserEndpoint({
     id: 'Ping',
-    entry: path.join(repoRoot, 'user', 'ping.ts'),
+    entryRelativeToUserDir: 'ping.ts',
     // exportName defaults to "business"
   });
 
@@ -25,7 +22,7 @@ export function register(ctx: UserExtensionCtx): void {
   // ------------------------------------------------------------
   const exampleAuthCallFn = ctx.endpoint.createUserEndpoint({
     id: 'ExampleAuthCall',
-    entry: path.join(repoRoot, 'user', 'example-auth-call.ts'),
+    entryRelativeToUserDir: 'example-auth-call.ts',
   });
 
   ctx.api.registerApiRoute({
@@ -40,7 +37,7 @@ export function register(ctx: UserExtensionCtx): void {
   // ------------------------------------------------------------
   const exampleCsrfCallFn = ctx.endpoint.createUserEndpoint({
     id: 'ExampleCsrfCall',
-    entry: path.join(repoRoot, 'user', 'example-csrf-call.ts'),
+    entryRelativeToUserDir: 'example-csrf-call.ts',
   });
 
   ctx.api.registerApiRoute({

@@ -27,40 +27,19 @@ export type RegisterApiRouteInput = {
 };
 
 export type CreateUserEndpointInput = {
-  /**
-   * Stable logical id (platform will prefix/sanitize internally to avoid collisions).
-   * Example: "Ping", "InvoicesList", etc.
-   */
   id: string;
 
   /**
-   * Absolute path to a user module file.
-   * The module must export a SecureHttpBusinessFn (see secure-http.ts types).
-   *
-   * Example:
-   *   path.join(repoRoot, 'user', 'ping.ts')
+   * Path relative to infra/user/
+   * Examples:
+   *  - "ping.ts"
+   *  - "example-auth-call.ts"
+   *  - "billing/invoices.ts"
    */
-  entry: string;
+  entryRelativeToUserDir: string;
 
-  /**
-   * Which named export to import from the user module as the business function.
-   * Defaults to "business".
-   */
   exportName?: string;
-
-  /**
-   * Extra env vars for the endpoint (merged).
-   * Platform-required vars are injected automatically and cannot be overridden.
-   *
-   * Reserved: keys starting with "PLATFORM_" are reserved for the platform and will be rejected.
-   * Currently injected:
-   * - PLATFORM_ORIGIN_VERIFY_HEADER_NAME
-   * - PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN
-   * - PLATFORM_CSRF_COOKIE_NAME
-   * - PLATFORM_CSRF_HEADER_NAME
-   */
   environment?: Record<string, string>;
-
   timeoutSeconds?: number;
   memorySizeMb?: number;
 };

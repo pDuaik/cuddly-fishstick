@@ -91,6 +91,7 @@ export class ApiStack extends cdk.Stack {
     };
 
     const repoRoot = path.resolve(__dirname, '..');
+    const userDir = path.join(repoRoot, 'user');
 
     const lambdaDefaults = {
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -366,11 +367,24 @@ export const handler = secureHttp(business);
 
     const createUserEndpoint: UserExtensionCtx['endpoint']['createUserEndpoint'] = (input) => {
       const idRaw = (input?.id ?? '').toString().trim();
-      const entryRaw = (input?.entry ?? '').toString().trim();
+      const entryRelRaw = (input?.entryRelativeToUserDir ?? '').toString().trim();
       const exportName = (input?.exportName ?? 'business').toString().trim() || 'business';
 
       if (!idRaw) throw new Error('createUserEndpoint: "id" is required.');
-      if (!entryRaw) throw new Error(`createUserEndpoint(${idRaw}): "entry" is required.`);
+      if (!entryRelRaw) throw new Error(`createUserEndpoint(${idRaw}): "entryRelativeToUserDir" is required.`);
+
+      // Normalize to forward slashes and remove any leading "/" so it's always relative
+      const entryRel = entryRelRaw.replace(/\\/g, '/').replace(/^\/+/, '');
+
+      // Block attempts to escape infra/user with ".."
+      if (entryRel.includes('..')) {
+        throw new Error(
+          `createUserEndpoint(${idRaw}): entryRelativeToUserDir must not contain "..": ${entryRelRaw}`,
+        );
+      }
+
+      // Convert relative -> absolute under infra/user
+      const userEntryAbs = path.join(userDir, entryRel);
 
       const userEnv = (input.environment ?? {}) as Record<string, string>;
 
@@ -381,7 +395,7 @@ export const handler = secureHttp(business);
         }
       }
 
-      // ✅ Step 5: reserve a namespace for platform env vars (future-proofing)
+      // Step 5: reserve a namespace for platform env vars (future-proofing)
       for (const k of Object.keys(userEnv)) {
         if (k.startsWith(PLATFORM_ENV_PREFIX)) {
           throw new Error(
@@ -393,9 +407,10 @@ export const handler = secureHttp(business);
 
       const wrapperEntry = writeWrapperEntrypoint({
         id: idRaw,
-        userEntryAbs: entryRaw,
+        userEntryAbs,
         exportName,
       });
+
 
       // Prefix to reduce collisions
       const safeId = this.sanitizeId(idRaw);
