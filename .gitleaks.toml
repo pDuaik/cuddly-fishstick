@@ -1,0 +1,16 @@
+[allowlist]
+description = "Known false-positive: PEM marker strings in helpers.ts (historical commits)"
+commits = [
+  "e74ae9b4183d6cb8145132a2ae50eb0173999881",
+  "2c9134a3cbcd1e1f718cc096ac9cfe933e0f9be4",
+]
+paths = [
+  '''infra/lambda/api/helpers\.ts'''
+]
+rules = [
+  "private-key"
+]
+regexes = [
+  '''-----BEGIN PRIVATE KEY-----''',
+  '''-----END PRIVATE KEY-----''',
+]

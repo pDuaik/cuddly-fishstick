@@ -384,8 +384,9 @@ export async function loadPrivateKeyFromSecrets(secretArn: string): Promise<stri
   // If it’s a one-line PEM (header/body/footer all in one line), reformat it.
   // e.g. "-----BEGIN PRIVATE KEY----- MIIE... -----END PRIVATE KEY-----"
   if (raw.includes('BEGIN PRIVATE KEY') && raw.includes('END PRIVATE KEY') && !raw.includes('\n')) {
-    // pull out the base64 between markers (allow spaces)
+    // gitleaks:allow
     const begin = '-----BEGIN PRIVATE KEY-----';
+    // gitleaks:allow
     const end = '-----END PRIVATE KEY-----';
 
     const b = raw.indexOf(begin);
