@@ -15,6 +15,11 @@ import {
   json,
 } from './helpers';
 
+import {
+  PLATFORM_CSRF_COOKIE_NAME,
+} from './platform-env';
+
+
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
@@ -24,7 +29,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const tableName = requireEnv('SESSIONS_TABLE_NAME');
 
   const cookieName = env('COOKIE_NAME', 'session') || 'session';
-  const csrfCookieName = env('CSRF_COOKIE_NAME', '__Host-csrf') || '__Host-csrf';
+  const csrfCookieName = env(PLATFORM_CSRF_COOKIE_NAME, '__Host-csrf') || '__Host-csrf';
 
   // Where user ends up AFTER Cognito logout completes
   const postLogoutRedirect = safeAbsoluteHttpsUrl(env('POST_LOGOUT_REDIRECT', ''), 'https://example.invalid/');

@@ -1,7 +1,10 @@
 // lambda/api/secure-http.ts
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-
 import { enforceOriginVerify, getCookie, getHeader, json, requireEnv, timingSafeEqualStr } from './helpers';
+import {
+  PLATFORM_CSRF_COOKIE_NAME,
+  PLATFORM_CSRF_HEADER_NAME,
+} from './platform-env';
 
 type HttpApiEventWithAuthorizer = APIGatewayProxyEventV2 & {
   requestContext: APIGatewayProxyEventV2['requestContext'] & {
@@ -84,8 +87,8 @@ function enforceCsrfIfNeeded(
 ): { ok: true } | { ok: false; statusCode: number; message: string } {
   if (isSafeMethod(method)) return { ok: true };
 
-  const cookieName = requireEnv('CSRF_COOKIE_NAME');
-  const headerName = requireEnv('CSRF_HEADER_NAME');
+  const cookieName = requireEnv(PLATFORM_CSRF_COOKIE_NAME);
+  const headerName = requireEnv(PLATFORM_CSRF_HEADER_NAME);
 
   const tokenCookie = getCookie(event, cookieName);
   const tokenHeader = getHeader(event, headerName);

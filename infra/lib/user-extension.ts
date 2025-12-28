@@ -51,6 +51,13 @@ export type CreateUserEndpointInput = {
   /**
    * Extra env vars for the endpoint (merged).
    * Platform-required vars are injected automatically and cannot be overridden.
+   *
+   * Reserved: keys starting with "PLATFORM_" are reserved for the platform and will be rejected.
+   * Currently injected:
+   * - PLATFORM_ORIGIN_VERIFY_HEADER_NAME
+   * - PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN
+   * - PLATFORM_CSRF_COOKIE_NAME
+   * - PLATFORM_CSRF_HEADER_NAME
    */
   environment?: Record<string, string>;
 

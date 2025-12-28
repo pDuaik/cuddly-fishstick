@@ -20,6 +20,12 @@ import {
   cfB64,
 } from './helpers';
 
+import {
+  PLATFORM_CSRF_COOKIE_NAME,
+  PLATFORM_CSRF_HEADER_NAME,
+} from './platform-env';
+
+
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
 export async function handler(event: any) {
@@ -37,8 +43,8 @@ export async function handler(event: any) {
 
   const cookieName = env('COOKIE_NAME', 'session') || 'session';
 
-  const csrfCookieName = env('CSRF_COOKIE_NAME', '__Host-csrf') || '__Host-csrf';
-  const csrfHeaderName = env('CSRF_HEADER_NAME', 'X-CSRF-Token') || 'X-CSRF-Token';
+  const csrfCookieName = env(PLATFORM_CSRF_COOKIE_NAME, '__Host-csrf') || '__Host-csrf';
+  const csrfHeaderName = env(PLATFORM_CSRF_HEADER_NAME, 'X-CSRF-Token') || 'X-CSRF-Token';
 
   // Opaque user key cookie (stable per user, NOT Cognito sub)
   const opaqueCookieName = env('OPAQUE_ID_COOKIE_NAME', '__Host-uk') || '__Host-uk';

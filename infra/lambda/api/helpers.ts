@@ -2,6 +2,10 @@
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import crypto from 'crypto';
+import {
+  PLATFORM_ORIGIN_VERIFY_HEADER_NAME,
+  PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN,
+} from './platform-env';
 
 const secrets = new SecretsManagerClient({});
 
@@ -238,9 +242,9 @@ export function requireEnv(name: string): string {
 }
 
 async function getOriginVerifyExpected(): Promise<string> {
-  const arnOrName = env('ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN', '');
+  const arnOrName = env(PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN, '');
   if (!arnOrName) {
-    console.log('[origin-verify] SSM param not configured (ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN empty)');
+    console.log('[origin-verify] SSM param not configured (PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN empty)');
     return '';
   }
 
@@ -283,9 +287,9 @@ async function getOriginVerifyExpected(): Promise<string> {
 }
 
 export async function enforceOriginVerify(event: HeaderCookieEvent | any): Promise<OriginVerifyResult> {
-  const headerName = env('ORIGIN_VERIFY_HEADER_NAME', '');
+  const headerName = env(PLATFORM_ORIGIN_VERIFY_HEADER_NAME, '');
   if (!headerName) {
-    console.log('[origin-verify] missing ORIGIN_VERIFY_HEADER_NAME');
+    console.log('[origin-verify] missing PLATFORM_ORIGIN_VERIFY_HEADER_NAME');
     return { ok: false, statusCode: 500, message: 'Server misconfigured: origin verify header not set' };
   }
 

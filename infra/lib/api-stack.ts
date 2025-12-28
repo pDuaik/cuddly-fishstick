@@ -17,6 +17,14 @@ import type { AppConfig } from './config';
 import type { UserExtensionCtx, UserApiMethod } from './user-extension';
 import * as user from '../user/index';
 
+import {
+  PLATFORM_ENV_PREFIX,
+  PLATFORM_ORIGIN_VERIFY_HEADER_NAME,
+  PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN,
+  PLATFORM_CSRF_COOKIE_NAME,
+  PLATFORM_CSRF_HEADER_NAME,
+} from '../lambda/api/platform-env';
+
 export interface ApiStackProps extends cdk.StackProps {
   config: AppConfig;
 
@@ -123,8 +131,8 @@ export class ApiStack extends cdk.Stack {
 
         ...cookieNames,
 
-        ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
+        [PLATFORM_ORIGIN_VERIFY_HEADER_NAME]: originVerifyHeaderName,
+        [PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN]: originVerifyHeaderValueParameterArn,
       },
     });
     allowReadOriginVerifyParam(authStartFn);
@@ -161,11 +169,11 @@ export class ApiStack extends cdk.Stack {
         CF_APP_RESOURCE: cfResource,
         CF_COOKIE_TTL_SECONDS: String(cfCookieTtlSeconds),
 
-        CSRF_COOKIE_NAME: '__Host-csrf',
-        CSRF_HEADER_NAME: 'X-CSRF-Token',
+        [PLATFORM_CSRF_COOKIE_NAME]: '__Host-csrf',
+        [PLATFORM_CSRF_HEADER_NAME]: 'X-CSRF-Token',
 
-        ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
+        [PLATFORM_ORIGIN_VERIFY_HEADER_NAME]: originVerifyHeaderName,
+        [PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN]: originVerifyHeaderValueParameterArn,
       },
     });
     allowReadOriginVerifyParam(authCallbackFn);
@@ -188,7 +196,7 @@ export class ApiStack extends cdk.Stack {
       environment: {
         SESSIONS_TABLE_NAME: props.sessionsTable.tableName,
         COOKIE_NAME: 'session',
-        CSRF_COOKIE_NAME: '__Host-csrf',
+        [PLATFORM_CSRF_COOKIE_NAME]: '__Host-csrf',
 
         AUTH_COOKIE_PATH: '/auth',
 
@@ -202,8 +210,8 @@ export class ApiStack extends cdk.Stack {
         CF_COOKIE_DOMAIN: cfCookieDomain,
         CF_COOKIE_PATH: cfCookiePath,
 
-        ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
+        [PLATFORM_ORIGIN_VERIFY_HEADER_NAME]: originVerifyHeaderName,
+        [PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN]: originVerifyHeaderValueParameterArn,
       },
     });
     allowReadOriginVerifyParam(authLogoutFn);
@@ -218,8 +226,8 @@ export class ApiStack extends cdk.Stack {
         SESSIONS_TABLE_NAME: props.sessionsTable.tableName,
         COOKIE_NAME: 'session',
 
-        ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
+        [PLATFORM_ORIGIN_VERIFY_HEADER_NAME]: originVerifyHeaderName,
+        [PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN]: originVerifyHeaderValueParameterArn,
       },
     });
     allowReadOriginVerifyParam(sessionAuthorizerFn);
@@ -231,8 +239,8 @@ export class ApiStack extends cdk.Stack {
       entry: path.join(repoRoot, 'lambda', 'api', 'me.ts'),
       handler: 'handler',
       environment: {
-        ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
+        [PLATFORM_ORIGIN_VERIFY_HEADER_NAME]: originVerifyHeaderName,
+        [PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN]: originVerifyHeaderValueParameterArn,
       },
     });
     allowReadOriginVerifyParam(meFn);
@@ -246,11 +254,11 @@ export class ApiStack extends cdk.Stack {
         USER_PROFILE_TABLE_NAME: props.userProfileTable.tableName,
         USERS_BUCKET_NAME: props.usersBucket.bucketName,
 
-        CSRF_COOKIE_NAME: '__Host-csrf',
-        CSRF_HEADER_NAME: 'X-CSRF-Token',
+        [PLATFORM_CSRF_COOKIE_NAME]: '__Host-csrf',
+        [PLATFORM_CSRF_HEADER_NAME]: 'X-CSRF-Token',
 
-        ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-        ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
+        [PLATFORM_ORIGIN_VERIFY_HEADER_NAME]: originVerifyHeaderName,
+        [PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN]: originVerifyHeaderValueParameterArn,
       },
     });
     allowReadOriginVerifyParam(updateThemeFn);
@@ -313,13 +321,11 @@ export class ApiStack extends cdk.Stack {
 
     const featuresScope = new Construct(this, 'UserFeatures');
 
-    const PLATFORM_ENV_PREFIX = 'PLATFORM_' as const;
-
     const requiredUserEnv = {
-      ORIGIN_VERIFY_HEADER_NAME: originVerifyHeaderName,
-      ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN: originVerifyHeaderValueParameterArn,
-      CSRF_COOKIE_NAME: '__Host-csrf',
-      CSRF_HEADER_NAME: 'X-CSRF-Token',
+      [PLATFORM_ORIGIN_VERIFY_HEADER_NAME]: originVerifyHeaderName,
+      [PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN]: originVerifyHeaderValueParameterArn,
+      [PLATFORM_CSRF_COOKIE_NAME]: '__Host-csrf',
+      [PLATFORM_CSRF_HEADER_NAME]: 'X-CSRF-Token',
     } as const;
 
     const sha1 = (s: string) => crypto.createHash('sha1').update(s).digest('hex').slice(0, 10);
