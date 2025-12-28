@@ -1,24 +1,13 @@
 // lambda/api/update-theme.ts
-import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
-import { enforceOriginVerify, getCookie, getHeader, json, requireEnv, timingSafeEqualStr } from './helpers';
+import { requireEnv } from './helpers';
+import { secureHttp } from './secure-http';
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
-
-type AuthedEvent = APIGatewayProxyEventV2 & {
-  requestContext: {
-    authorizer?: {
-      lambda?: {
-        session_id?: string;
-        user_sub?: string;
-      };
-    };
-  };
-};
 
 function normalizeRadius(input: string, min: number, max: number): string | null {
   const v = String(input ?? '').trim().toLowerCase();
@@ -34,34 +23,6 @@ function normalizePadding(input: string, min: number, max: number): string | nul
   const n = Number(v.replace('px', ''));
   if (!Number.isFinite(n) || n < min || n > max) return null;
   return `${n}px`;
-}
-
-function requireAuthorizer(event: AuthedEvent) {
-  const ctx = event.requestContext?.authorizer?.lambda;
-  if (!ctx?.session_id || !ctx?.user_sub) return null;
-  return { session_id: String(ctx.session_id), user_sub: String(ctx.user_sub) };
-}
-
-function enforceCsrf(event: AuthedEvent): { ok: true } | { ok: false; statusCode: number; message: string } {
-  const cookieName = requireEnv('CSRF_COOKIE_NAME');
-  const headerName = requireEnv('CSRF_HEADER_NAME');
-
-  const tokenCookie = getCookie(event, cookieName);
-  const tokenHeader = getHeader(event, headerName);
-
-  if (!tokenCookie || !tokenHeader) return { ok: false, statusCode: 403, message: 'Forbidden (missing CSRF token)' };
-  if (!timingSafeEqualStr(tokenCookie, tokenHeader)) return { ok: false, statusCode: 403, message: 'Forbidden (bad CSRF token)' };
-
-  return { ok: true };
-}
-
-function parseBody(event: AuthedEvent): any {
-  if (!event.body) return {};
-  try {
-    return event.isBase64Encoded ? JSON.parse(Buffer.from(event.body, 'base64').toString('utf-8')) : JSON.parse(event.body);
-  } catch {
-    throw new Error('Invalid JSON body');
-  }
 }
 
 function normalizeHexColor(input: string): string | null {
@@ -92,7 +53,7 @@ function validateThemeVars(input: any): { ok: true; vars: ThemeVars } | { ok: fa
   const raw = input?.vars && typeof input.vars === 'object' ? input.vars : input;
   if (!raw || typeof raw !== 'object') return { ok: false, message: 'Expected JSON body like: { "vars": { ... } }' };
 
-  const out: ThemeVars = {}; // ✅ declare first
+  const out: ThemeVars = {};
 
   // Button padding
   if (raw.btnPadX != null && raw.btnPadX !== '') {
@@ -149,7 +110,12 @@ function validateThemeVars(input: any): { ok: true; vars: ThemeVars } | { ok: fa
   if (raw.shadowPreset != null && raw.shadowPreset !== '') {
     const key = String(raw.shadowPreset).trim().toLowerCase();
     const preset = SHADOW_PRESETS[key];
-    if (!preset) return { ok: false, message: `Invalid shadowPreset. Use one of: ${Object.keys(SHADOW_PRESETS).join(', ')}` };
+    if (!preset) {
+      return {
+        ok: false,
+        message: `Invalid shadowPreset. Use one of: ${Object.keys(SHADOW_PRESETS).join(', ')}`,
+      };
+    }
     out['--shadow'] = preset;
   }
 
@@ -161,44 +127,31 @@ function validateThemeVars(input: any): { ok: true; vars: ThemeVars } | { ok: fa
 }
 
 function renderThemeCss(vars: ThemeVars): string {
-  // Stable order helps diffs/debugging
   const lines = Object.keys(vars)
     .sort()
     .map((k) => `  ${k}: ${vars[k]};`);
   return `:root {\n${lines.join('\n')}\n}\n`;
 }
 
-export async function handler(event: AuthedEvent): Promise<APIGatewayProxyResultV2> {
-  const ov = await enforceOriginVerify(event);
-  if (!ov.ok) return json(ov.statusCode, { ok: false, message: ov.message });
-
-  const authed = requireAuthorizer(event);
-  if (!authed) return json(401, { ok: false, message: 'Unauthorized' });
-
-  const csrf = enforceCsrf(event);
-  if (!csrf.ok) return json(csrf.statusCode, { ok: false, message: csrf.message });
-
-  let body: any = {};
-  try {
-    body = parseBody(event);
-  } catch (e: any) {
-    return json(400, { ok: false, message: e?.message ?? 'Invalid JSON body' });
+export const handler = secureHttp(async (ctx, input) => {
+  const validated = validateThemeVars(input.body);
+  if (!validated.ok) {
+    return { statusCode: 400, body: { ok: false, message: validated.message } };
   }
-
-  const validated = validateThemeVars(body);
-  if (!validated.ok) return json(400, { ok: false, message: validated.message });
 
   const profileTable = requireEnv('USER_PROFILE_TABLE_NAME');
   const got = await ddb.send(
     new GetCommand({
       TableName: profileTable,
-      Key: { user_sub: authed.user_sub },
+      Key: { user_sub: ctx.user_sub },
       ProjectionExpression: 'opaque_id',
     }),
   );
 
   const opaqueId = String(got.Item?.opaque_id ?? '');
-  if (!opaqueId) return json(500, { ok: false, message: 'User profile missing opaque_id' });
+  if (!opaqueId) {
+    return { statusCode: 500, body: { ok: false, message: 'User profile missing opaque_id' } };
+  }
 
   const bucket = requireEnv('USERS_BUCKET_NAME');
   const key = `u/${opaqueId}/theme.css`;
@@ -215,9 +168,8 @@ export async function handler(event: AuthedEvent): Promise<APIGatewayProxyResult
     }),
   );
 
-  return json(200, {
-    ok: true,
+  return {
     key,
     vars: validated.vars,
-  });
-}
+  };
+});
