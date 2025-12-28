@@ -1,14 +1,7 @@
 // lambda/api/secure-http.ts
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 
-import {
-  enforceOriginVerify,
-  getCookie,
-  getHeader,
-  json,
-  requireEnv,
-  timingSafeEqualStr,
-} from './helpers';
+import { enforceOriginVerify, getCookie, getHeader, json, requireEnv, timingSafeEqualStr } from './helpers';
 
 type HttpApiEventWithAuthorizer = APIGatewayProxyEventV2 & {
   requestContext: APIGatewayProxyEventV2['requestContext'] & {
@@ -33,6 +26,7 @@ export type SecureHttpInput = {
 export type SecureHttpOk = Record<string, unknown>;
 
 export type SecureHttpOverride = {
+  __override: true;
   statusCode: number;
   body: Record<string, unknown>;
 };
@@ -45,11 +39,12 @@ export type SecureHttpBusinessFn = (
 ) => Promise<SecureHttpResult> | SecureHttpResult;
 
 type SecureHttpOptions = {
-  // reserved for future; keep minimal for now
+  // reserved for future
 };
 
-function methodUpper(event: APIGatewayProxyEventV2): string {
-  return String(event.requestContext?.http?.method ?? '').toUpperCase();
+function methodUpper(event: APIGatewayProxyEventV2): string | null {
+  const m = String(event.requestContext?.http?.method ?? '').trim().toUpperCase();
+  return m ? m : null;
 }
 
 function isSafeMethod(m: string): boolean {
@@ -62,7 +57,6 @@ function readAuthorizer(event: HttpApiEventWithAuthorizer): { session_id: string
   const user_sub = (auth as any).user_sub;
 
   if (!session_id || !user_sub) return null;
-
   return { session_id: String(session_id), user_sub: String(user_sub) };
 }
 
@@ -70,10 +64,7 @@ function parseJsonBody(event: APIGatewayProxyEventV2): { ok: true; body: unknown
   if (!event.body) return { ok: true, body: undefined };
 
   try {
-    const raw = event.isBase64Encoded
-      ? Buffer.from(event.body, 'base64').toString('utf-8')
-      : event.body;
-
+    const raw = event.isBase64Encoded ? Buffer.from(event.body, 'base64').toString('utf-8') : event.body;
     if (!raw.trim()) return { ok: true, body: undefined };
     return { ok: true, body: JSON.parse(raw) };
   } catch {
@@ -107,26 +98,28 @@ function enforceCsrfIfNeeded(
 function isOverrideResult(v: unknown): v is SecureHttpOverride {
   if (!v || typeof v !== 'object') return false;
   const r = v as any;
-  return typeof r.statusCode === 'number' && r.body != null && typeof r.body === 'object';
+  return r.__override === true && typeof r.statusCode === 'number' && r.body != null && typeof r.body === 'object';
+}
+
+// Convenience helper so business code can return overrides without repeating the sentinel.
+export function httpOverride(statusCode: number, body: Record<string, unknown>): SecureHttpOverride {
+  return { __override: true, statusCode, body };
 }
 
 export function secureHttp(businessFn: SecureHttpBusinessFn, _options?: SecureHttpOptions) {
   return async function handler(event: HttpApiEventWithAuthorizer): Promise<APIGatewayProxyResultV2> {
-    // 1) CloudFront-only origin verification (fail closed)
     const ov = await enforceOriginVerify(event);
     if (!ov.ok) return json(ov.statusCode, { ok: false, message: ov.message });
 
-    // 2) Authorizer context required
     const authed = readAuthorizer(event);
     if (!authed) return json(401, { ok: false, message: 'Unauthorized' });
 
     const method = methodUpper(event);
+    if (!method) return json(400, { ok: false, message: 'Bad Request (missing method)' });
 
-    // 3) CSRF enforcement by method (unsafe only)
     const csrf = enforceCsrfIfNeeded(event, method);
     if (!csrf.ok) return json(csrf.statusCode, { ok: false, message: csrf.message });
 
-    // 4) JSON parsing and consistent errors
     const parsed = parseJsonBody(event);
     if (!parsed.ok) return json(400, { ok: false, message: 'Invalid JSON body' });
 
@@ -140,16 +133,21 @@ export function secureHttp(businessFn: SecureHttpBusinessFn, _options?: SecureHt
     try {
       const out = await businessFn(ctx, { body: parsed.body, event });
 
-      // Business override: let handler return status + body exactly (no re-wrapping).
       if (isOverrideResult(out)) {
         return json(out.statusCode, out.body);
       }
 
-      // Default success wrapper
       return json(200, { ok: true, ...(out ?? {}) });
     } catch (e: any) {
-      // Keep it consistent and not leaky
-      return json(500, { ok: false, message: e?.message ?? 'Internal error' });
+      // keep response non-leaky; log the real error for debugging
+      console.error('secureHttp businessFn error', {
+        requestId: ctx.requestId,
+        user_sub: ctx.user_sub,
+        message: e?.message,
+        stack: e?.stack,
+      });
+
+      return json(500, { ok: false, message: 'Internal error' });
     }
   };
 }
