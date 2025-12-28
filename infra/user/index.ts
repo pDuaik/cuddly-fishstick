@@ -6,13 +6,26 @@ const repoRoot = path.resolve(__dirname, '..');
 
 export function register(ctx: UserExtensionCtx): void {
   // ------------------------------------------------------------
-  // Example: authenticated GET /api/example-auth-call
-  // secureHttp is enforced by the platform wrapper (non-optional)
+  // GET /api/ping
+  // ------------------------------------------------------------
+  const pingFn = ctx.endpoint.createUserEndpoint({
+    id: 'Ping',
+    entry: path.join(repoRoot, 'user', 'ping.ts'),
+    // exportName defaults to "business"
+  });
+
+  ctx.api.registerApiRoute({
+    path: '/api/ping',
+    methods: ['GET'],
+    fn: pingFn,
+  });
+
+  // ------------------------------------------------------------
+  // GET /api/example-auth-call
   // ------------------------------------------------------------
   const exampleAuthCallFn = ctx.endpoint.createUserEndpoint({
     id: 'ExampleAuthCall',
     entry: path.join(repoRoot, 'user', 'example-auth-call.ts'),
-    exportName: 'business', // default is 'business', kept explicit for clarity
   });
 
   ctx.api.registerApiRoute({
@@ -22,13 +35,12 @@ export function register(ctx: UserExtensionCtx): void {
   });
 
   // ------------------------------------------------------------
-  // Example: authenticated POST /api/example-csrf-call
-  // CSRF is enforced automatically by secureHttp for non-safe methods
+  // POST /api/example-csrf-call
+  // (CSRF automatically enforced by secureHttp)
   // ------------------------------------------------------------
   const exampleCsrfCallFn = ctx.endpoint.createUserEndpoint({
     id: 'ExampleCsrfCall',
     entry: path.join(repoRoot, 'user', 'example-csrf-call.ts'),
-    exportName: 'business',
   });
 
   ctx.api.registerApiRoute({
