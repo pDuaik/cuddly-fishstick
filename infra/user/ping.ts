@@ -1,9 +1,9 @@
 // infra/user/ping.ts
-import { secureHttp } from '../lambda/api/secure-http';
+import type { SecureHttpBusinessFn } from '../lambda/api/secure-http';
 
-export const handler = secureHttp(async (ctx) => {
+export const business: SecureHttpBusinessFn = async (ctx) => {
   return {
     message: 'pong',
     user_sub: ctx.user_sub,
   };
-});
+};

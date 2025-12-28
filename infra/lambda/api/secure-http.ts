@@ -25,13 +25,19 @@ export type SecureHttpInput = {
 
 export type SecureHttpOk = Record<string, unknown>;
 
-export type SecureHttpOverride = {
+// Non-exported on purpose: users should use httpOverride(), not construct this.
+type SecureHttpOverride = {
   __override: true;
   statusCode: number;
   body: Record<string, unknown>;
 };
 
-export type SecureHttpResult = SecureHttpOk | SecureHttpOverride;
+// Convenience helper so business code can return overrides without repeating the sentinel.
+export function httpOverride(statusCode: number, body: Record<string, unknown>) {
+  return { __override: true, statusCode, body } as const;
+}
+
+export type SecureHttpResult = SecureHttpOk | ReturnType<typeof httpOverride>;
 
 export type SecureHttpBusinessFn = (
   ctx: SecureHttpCtx,
@@ -101,9 +107,20 @@ function isOverrideResult(v: unknown): v is SecureHttpOverride {
   return r.__override === true && typeof r.statusCode === 'number' && r.body != null && typeof r.body === 'object';
 }
 
-// Convenience helper so business code can return overrides without repeating the sentinel.
-export function httpOverride(statusCode: number, body: Record<string, unknown>): SecureHttpOverride {
-  return { __override: true, statusCode, body };
+function assertValidBusinessResult(v: unknown): asserts v is Record<string, unknown> {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) {
+    throw new Error('secureHttp businessFn must return an object (or use httpOverride(statusCode, body)).');
+  }
+
+  // Prevent collisions with platform-controlled fields/sentinels.
+  const reservedKeys = ['ok', '__override'] as const;
+  for (const k of reservedKeys) {
+    if (k in (v as any)) {
+      throw new Error(
+        `secureHttp businessFn returned reserved key "${k}". Remove it, or use httpOverride(statusCode, body).`,
+      );
+    }
+  }
 }
 
 export function secureHttp(businessFn: SecureHttpBusinessFn, _options?: SecureHttpOptions) {
@@ -137,9 +154,11 @@ export function secureHttp(businessFn: SecureHttpBusinessFn, _options?: SecureHt
         return json(out.statusCode, out.body);
       }
 
-      return json(200, { ok: true, ...(out ?? {}) });
+      const payload: unknown = out ?? {};
+      assertValidBusinessResult(payload);
+
+      return json(200, { ok: true, ...payload });
     } catch (e: any) {
-      // keep response non-leaky; log the real error for debugging
       console.error('secureHttp businessFn error', {
         requestId: ctx.requestId,
         user_sub: ctx.user_sub,
