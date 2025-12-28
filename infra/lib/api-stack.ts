@@ -380,7 +380,8 @@ export const handler = secureHttp(business);
       });
 
       // Prefix to reduce collisions
-      const constructId = `UserEndpoint${idRaw}`;
+      const safeId = this.sanitizeId(idRaw);
+      const constructId = `UserEndpoint${safeId}`;
 
       const fn = new NodejsFunction(featuresScope, constructId, {
         ...lambdaDefaults,
@@ -433,8 +434,7 @@ export const handler = secureHttp(business);
       const methods = methodsRaw.map(normalizeMethod);
 
       // Make integration id more stable/unique than just path+methods
-      const integrationId = `UserIntegration${this.sanitizeId(routePath)}${methods.join('')}${this.sanitizeId(fn.node.id)}`;
-
+      const integrationId = `UserIntegration${this.sanitizeId(fn.node.id)}`;
       const integration = new apigwv2Integrations.HttpLambdaIntegration(integrationId, fn);
 
       this.httpApi.addRoutes({
