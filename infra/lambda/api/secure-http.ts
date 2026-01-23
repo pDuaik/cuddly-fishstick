@@ -1,13 +1,6 @@
 // lambda/api/secure-http.ts
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import {
-  enforceOriginVerify,
-  getCookie,
-  getHeader,
-  json,
-  requireEnv,
-  timingSafeEqualStr,
-} from './helpers';
+import { enforceOriginVerify, getCookie, getHeader, json, requireEnv, timingSafeEqualStr } from './helpers';
 import {
   PLATFORM_CSRF_COOKIE_NAME,
   PLATFORM_CSRF_HEADER_NAME,
@@ -35,33 +28,16 @@ export type SecureHttpInput = {
 
 export type SecureHttpOk = Record<string, unknown>;
 
-// -----------------------------------------------------------------------------
-// Override support (HTTP API v2–correct)
-// -----------------------------------------------------------------------------
-
+// Non-exported on purpose: users should use httpOverride(), not construct this.
 type SecureHttpOverride = {
   __override: true;
   statusCode: number;
   body: Record<string, unknown>;
-  headers?: Record<string, string>;
-  cookies?: string[];
 };
 
-export function httpOverride(
-  statusCode: number,
-  body: Record<string, unknown>,
-  opts?: {
-    headers?: Record<string, string>;
-    cookies?: string[];
-  },
-) {
-  return {
-    __override: true,
-    statusCode,
-    body,
-    headers: opts?.headers,
-    cookies: opts?.cookies,
-  } as const;
+// Convenience helper so business code can return overrides without repeating the sentinel.
+export function httpOverride(statusCode: number, body: Record<string, unknown>) {
+  return { __override: true, statusCode, body } as const;
 }
 
 export type SecureHttpResult = SecureHttpOk | ReturnType<typeof httpOverride>;
@@ -75,10 +51,6 @@ type SecureHttpOptions = {
   // reserved for future
 };
 
-// -----------------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------------
-
 function methodUpper(event: APIGatewayProxyEventV2): string | null {
   const m = String(event.requestContext?.http?.method ?? '').trim().toUpperCase();
   return m ? m : null;
@@ -88,9 +60,7 @@ function isSafeMethod(m: string): boolean {
   return m === 'GET' || m === 'HEAD' || m === 'OPTIONS';
 }
 
-function readAuthorizer(
-  event: HttpApiEventWithAuthorizer,
-): { session_id: string; user_sub: string } | null {
+function readAuthorizer(event: HttpApiEventWithAuthorizer): { session_id: string; user_sub: string } | null {
   const auth = event.requestContext.authorizer?.lambda ?? {};
   const session_id = (auth as any).session_id;
   const user_sub = (auth as any).user_sub;
@@ -99,16 +69,11 @@ function readAuthorizer(
   return { session_id: String(session_id), user_sub: String(user_sub) };
 }
 
-function parseJsonBody(
-  event: APIGatewayProxyEventV2,
-): { ok: true; body: unknown } | { ok: false } {
+function parseJsonBody(event: APIGatewayProxyEventV2): { ok: true; body: unknown } | { ok: false } {
   if (!event.body) return { ok: true, body: undefined };
 
   try {
-    const raw = event.isBase64Encoded
-      ? Buffer.from(event.body, 'base64').toString('utf-8')
-      : event.body;
-
+    const raw = event.isBase64Encoded ? Buffer.from(event.body, 'base64').toString('utf-8') : event.body;
     if (!raw.trim()) return { ok: true, body: undefined };
     return { ok: true, body: JSON.parse(raw) };
   } catch {
@@ -142,41 +107,27 @@ function enforceCsrfIfNeeded(
 function isOverrideResult(v: unknown): v is SecureHttpOverride {
   if (!v || typeof v !== 'object') return false;
   const r = v as any;
-  return (
-    r.__override === true &&
-    typeof r.statusCode === 'number' &&
-    r.body != null &&
-    typeof r.body === 'object'
-  );
+  return r.__override === true && typeof r.statusCode === 'number' && r.body != null && typeof r.body === 'object';
 }
 
 function assertValidBusinessResult(v: unknown): asserts v is Record<string, unknown> {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) {
-    throw new Error('secureHttp businessFn must return an object (or use httpOverride).');
+    throw new Error('secureHttp businessFn must return an object (or use httpOverride(statusCode, body)).');
   }
 
+  // Prevent collisions with platform-controlled fields/sentinels.
   const reservedKeys = ['ok', '__override'] as const;
   for (const k of reservedKeys) {
     if (k in (v as any)) {
       throw new Error(
-        `secureHttp businessFn returned reserved key "${k}". Remove it, or use httpOverride().`,
+        `secureHttp businessFn returned reserved key "${k}". Remove it, or use httpOverride(statusCode, body).`,
       );
     }
   }
 }
 
-// -----------------------------------------------------------------------------
-// Main handler wrapper
-// -----------------------------------------------------------------------------
-
-export function secureHttp(
-  businessFn: SecureHttpBusinessFn,
-  _options?: SecureHttpOptions,
-) {
-  return async function handler(
-    event: HttpApiEventWithAuthorizer,
-  ): Promise<APIGatewayProxyResultV2> {
-
+export function secureHttp(businessFn: SecureHttpBusinessFn, _options?: SecureHttpOptions) {
+  return async function handler(event: HttpApiEventWithAuthorizer): Promise<APIGatewayProxyResultV2> {
     const ov = await enforceOriginVerify(event);
     if (!ov.ok) return json(ov.statusCode, { ok: false, message: ov.message });
 
@@ -202,17 +153,10 @@ export function secureHttp(
     try {
       const out = await businessFn(ctx, { body: parsed.body, event });
 
-      // ----- OVERRIDE PATH -----
       if (isOverrideResult(out)) {
-        return {
-          statusCode: out.statusCode,
-          headers: out.headers,
-          cookies: out.cookies,
-          body: JSON.stringify(out.body),
-        };
+        return json(out.statusCode, out.body);
       }
 
-      // ----- NORMAL JSON PATH -----
       const payload: unknown = out ?? {};
       assertValidBusinessResult(payload);
 
