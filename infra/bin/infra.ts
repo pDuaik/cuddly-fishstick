@@ -47,6 +47,12 @@ const env: cdk.Environment = {
   region: process.env.CDK_DEFAULT_REGION,
 };
 
+const allowedFrameSrc =
+  Array.isArray(settings.allowedFrameSrc)
+    ? settings.allowedFrameSrc.map(s => s.trim()).filter(Boolean)
+    : [];
+
+
 // -------------------------
 // Stacks
 // -------------------------
@@ -94,4 +100,6 @@ new WebStack(app, `${config.projectName}-${config.stage}-web`, {
   cfPublicKeyId,
   originVerifyHeaderName,
   originVerifyHeaderValueParameterArn,
+  allowedFrameSrc,
 });
+

@@ -8,6 +8,8 @@ export type SettingsFile = {
   stage?: string;
   enableWaf?: boolean;
 
+  allowedFrameSrc?: string[];
+
   domain: string;
   certArnUsEast1: string;
 

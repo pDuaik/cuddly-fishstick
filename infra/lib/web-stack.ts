@@ -16,7 +16,9 @@ export interface WebStackProps extends cdk.StackProps {
   cfPublicKeyId: string; // CloudFront Public Key ID (Key Groups)
 
   originVerifyHeaderName: string; // e.g. X-Origin-Verify
-  originVerifyHeaderValueParameterArn: string; // SSM parameter ARN (Type=String)
+  originVerifyHeaderValueParameterArn: string; // SSM parameter ARN (Type=String)  
+
+  allowedFrameSrc?: string[];
 }
 
 function ssmDynamicReferenceFromParamArn(paramArn: string, version = 1): string {
@@ -69,18 +71,24 @@ export class WebStack extends cdk.Stack {
     // -------------------------
     // Response headers policies
     // -------------------------
+    const frameSrc = [
+      "'self'",
+      ...(props.allowedFrameSrc ?? []),
+    ].join(' ');
+
     const csp =
       "default-src 'self'; " +
       "base-uri 'self'; " +
       "object-src 'none'; " +
       "frame-ancestors 'self'; " +
+      `frame-src ${frameSrc}; ` +
       "form-action 'self'; " +
       "script-src 'self'; " +
       "style-src 'self'; " +
       "img-src 'self' data:; " +
       "connect-src 'self'; " +
       "font-src 'self'; " +
-      'upgrade-insecure-requests';
+      "upgrade-insecure-requests";
 
     const securityHeadersBehavior: cloudfront.ResponseSecurityHeadersBehavior = {
       contentSecurityPolicy: { contentSecurityPolicy: csp, override: true },
