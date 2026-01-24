@@ -134,7 +134,13 @@ export async function handler(event: any) {
     const text = await r.text();
     payload = JSON.parse(text);
 
-    if (!r.ok) throw new Error(`HTTP ${r.status}: ${text}`);
+    if (!r.ok) {
+      console.log('[auth-callback] token endpoint returned non-2xx', {
+        status: r.status,
+        bodyLen: text.length,
+      });
+      throw new Error(`HTTP ${r.status}`);
+    }
   } catch (e: any) {
     return resp(502, `Token exchange failed: ${e?.message ?? String(e)}`, {
       cookies: clearTempCookies(),
@@ -146,7 +152,16 @@ export async function handler(event: any) {
   const refreshToken = (payload?.refresh_token as string | undefined) ?? '';
 
   if (!idToken || !accessToken) {
-    return resp(502, `Token response missing tokens: ${JSON.stringify(payload)}`, {
+    // Log only non-sensitive diagnostics (never token values)
+    console.log('[auth-callback] token response missing required tokens', {
+      hasIdToken: !!idToken,
+      hasAccessToken: !!accessToken,
+      hasRefreshToken: !!refreshToken,
+      keys: payload ? Object.keys(payload) : [],
+    });
+
+    // Do NOT echo payload to the browser
+    return resp(502, 'Token exchange failed (missing required tokens)', {
       cookies: clearTempCookies(),
     });
   }
