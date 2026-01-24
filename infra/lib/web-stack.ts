@@ -177,7 +177,17 @@ function handler(event) {
   var cookies = req.cookies || {};
   var opaque = (cookies["__Host-uk"] && cookies["__Host-uk"].value) ? cookies["__Host-uk"].value : "";
 
-  if (!opaque) return req;
+  if (!opaque) {
+    return {
+      statusCode: 403,
+      statusDescription: "Forbidden",
+      headers: {
+        "cache-control": { value: "no-store" },
+        "content-type": { value: "text/plain; charset=utf-8" }
+      },
+      body: "Forbidden"
+    };
+  }
 
   var rest = uri.substring("/u/me/".length);
   req.uri = "/u/" + opaque + "/" + rest;
