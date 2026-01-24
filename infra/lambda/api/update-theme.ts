@@ -2,9 +2,8 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-
+import { secureHttp, httpOverride } from './secure-http';
 import { requireEnv } from './helpers';
-import { secureHttp } from './secure-http';
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
@@ -136,7 +135,7 @@ function renderThemeCss(vars: ThemeVars): string {
 export const handler = secureHttp(async (ctx, input) => {
   const validated = validateThemeVars(input.body);
   if (!validated.ok) {
-    return { statusCode: 400, body: { ok: false, message: validated.message } };
+    return httpOverride(400, { ok: false, message: validated.message });
   }
 
   const profileTable = requireEnv('USER_PROFILE_TABLE_NAME');
@@ -150,7 +149,7 @@ export const handler = secureHttp(async (ctx, input) => {
 
   const opaqueId = String(got.Item?.opaque_id ?? '');
   if (!opaqueId) {
-    return { statusCode: 500, body: { ok: false, message: 'User profile missing opaque_id' } };
+    return httpOverride(500, { ok: false, message: 'User profile missing opaque_id' });
   }
 
   const bucket = requireEnv('USERS_BUCKET_NAME');

@@ -153,6 +153,18 @@ export function secureHttp(businessFn: SecureHttpBusinessFn, _options?: SecureHt
     try {
       const out = await businessFn(ctx, { body: parsed.body, event });
 
+      // Guard: devs sometimes return { statusCode, body } expecting an early return.
+      // That shape is NOT an override unless __override is present.
+      if (
+        out &&
+        typeof out === 'object' &&
+        !isOverrideResult(out) &&
+        'statusCode' in (out as any) &&
+        'body' in (out as any)
+      ) {
+        throw new Error('secureHttp: use httpOverride(statusCode, body) instead of returning { statusCode, body }.');
+      }
+
       if (isOverrideResult(out)) {
         return json(out.statusCode, out.body);
       }
