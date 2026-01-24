@@ -30,6 +30,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
 
   const cookieName = env('COOKIE_NAME', 'session') || 'session';
   const csrfCookieName = env(PLATFORM_CSRF_COOKIE_NAME, '__Host-csrf') || '__Host-csrf';
+  const opaqueCookieName = env('OPAQUE_ID_COOKIE_NAME', '__Host-uk') || '__Host-uk';
 
   // Where user ends up AFTER Cognito logout completes
   const postLogoutRedirect = safeAbsoluteHttpsUrl(env('POST_LOGOUT_REDIRECT', ''), 'https://example.invalid/');
@@ -79,6 +80,18 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
       maxAge: 0,
     }),
   );
+
+  // 1b) Clear opaque user key cookie (HttpOnly, stable per user)
+  outCookies.push(
+    buildCookie(opaqueCookieName, '', {
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Lax',
+      maxAge: 0,
+    }),
+  );
+
 
   // 2) Clear CSRF cookie (NOT HttpOnly)
   // Note: "__Host-" cookies must NOT have Domain and must be Path=/
