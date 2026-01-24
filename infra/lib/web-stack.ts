@@ -38,6 +38,30 @@ function ssmDynamicReferenceFromParamArn(paramArn: string, version?: number): st
     : `{{resolve:ssm:${name}:${version}}}`;
 }
 
+function validateCspSource(src: string): string {
+  const s = src.trim();
+
+  if (!s) throw new Error('CSP source cannot be empty');
+
+  if (/[;\r\n'"]/.test(s)) {
+    throw new Error(`Invalid CSP source (contains illegal characters): ${src}`);
+  }
+
+  // Allow:
+  // https://example.com
+  // https://*.example.com
+  // blob:
+  // data:
+  const allowed = /^(https:\/\/(\*\.)?[a-z0-9.-]+|blob:|data:)$/i;
+
+  if (!allowed.test(s)) {
+    throw new Error(`Invalid CSP source format: ${src}`);
+  }
+
+  return s;
+}
+
+
 export class WebStack extends cdk.Stack {
   public readonly distributionId: string;
   public readonly distributionDomainName: string;
@@ -76,7 +100,7 @@ export class WebStack extends cdk.Stack {
     // -------------------------
     const frameSrc = [
       "'self'",
-      ...(props.allowedFrameSrc ?? []),
+      ...(props.allowedFrameSrc ?? []).map(validateCspSource),
     ].join(' ');
 
     const csp =
