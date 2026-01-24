@@ -21,9 +21,9 @@ export interface WebStackProps extends cdk.StackProps {
   allowedFrameSrc?: string[];
 }
 
-function ssmDynamicReferenceFromParamArn(paramArn: string, version = 1): string {
+function ssmDynamicReferenceFromParamArn(paramArn: string, version?: number): string {
   // Accepts: arn:aws:ssm:REGION:ACCOUNT:parameter/PATH/NAME
-  // Returns: {{resolve:ssm:/PATH/NAME:VERSION}}
+  // Returns: {{resolve:ssm:/PATH/NAME}} or {{resolve:ssm:/PATH/NAME:VERSION}}
   const marker = ':parameter/';
   const idx = paramArn.indexOf(marker);
   if (idx === -1) throw new Error(`Invalid SSM parameter ARN: ${paramArn}`);
@@ -32,7 +32,10 @@ function ssmDynamicReferenceFromParamArn(paramArn: string, version = 1): string 
   if (!name) throw new Error(`Invalid SSM parameter ARN (missing name): ${paramArn}`);
 
   if (!name.startsWith('/')) name = '/' + name;
-  return `{{resolve:ssm:${name}:${version}}}`;
+
+  return version === undefined
+    ? `{{resolve:ssm:${name}}}`          // latest on stack create/update
+    : `{{resolve:ssm:${name}:${version}}}`;
 }
 
 export class WebStack extends cdk.Stack {
@@ -137,7 +140,7 @@ export class WebStack extends cdk.Stack {
     // Origin verify header (dynamic reference)
     // -------------------------
     const originVerifyHeaderName = (props.originVerifyHeaderName || 'X-Origin-Verify').trim() || 'X-Origin-Verify';
-    const originVerifyHeaderValue = ssmDynamicReferenceFromParamArn(props.originVerifyHeaderValueParameterArn, 1);
+    const originVerifyHeaderValue = ssmDynamicReferenceFromParamArn(props.originVerifyHeaderValueParameterArn);
 
     // Managed policy IDs
     const cacheOptimizedId = cloudfront.CachePolicy.CACHING_OPTIMIZED.cachePolicyId;
