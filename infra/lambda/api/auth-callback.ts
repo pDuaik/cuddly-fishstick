@@ -2,7 +2,7 @@
 // CommonJS-compatible Lambda export: handler: "auth_callback.handler"
 
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import crypto from 'crypto';
 
 import {
@@ -161,36 +161,29 @@ export async function handler(event: any) {
   // ------------------------------------------------------------
   // Ensure opaque_id exists for this user (stable)
   // PK: user_sub, attribute: opaque_id
+  // Atomic: no race conditions under concurrent logins
   // ------------------------------------------------------------
   let opaqueId = '';
   try {
-    const got = await ddb.send(
-      new GetCommand({
+    const candidateOpaque = crypto.randomBytes(32).toString('base64url');
+
+    const upd = await ddb.send(
+      new UpdateCommand({
         TableName: userProfileTableName,
         Key: { user_sub: userSub },
-        ProjectionExpression: 'opaque_id',
+        UpdateExpression:
+          'SET opaque_id = if_not_exists(opaque_id, :oid), created_at = if_not_exists(created_at, :now), updated_at = :now',
+        ExpressionAttributeValues: {
+          ':oid': candidateOpaque,
+          ':now': now,
+        },
+        ReturnValues: 'ALL_NEW',
       }),
     );
 
-    opaqueId = (got.Item?.opaque_id as string) || '';
+    opaqueId = String(upd.Attributes?.opaque_id ?? '');
     if (!opaqueId) {
-      // 256-bit random -> base64url (~43 chars). Stable per user.
-      opaqueId = crypto.randomBytes(32).toString('base64url');
-
-      await ddb.send(
-        new PutCommand({
-          TableName: userProfileTableName,
-          Item: {
-            user_sub: userSub,
-            opaque_id: opaqueId,
-            created_at: now,
-            updated_at: now,
-          },
-          // Optional hardening (recommended): do not overwrite if it already exists
-          // Remove if you don't want conditional behavior yet.
-          ConditionExpression: 'attribute_not_exists(user_sub)',
-        }),
-      );
+      throw new Error('User profile missing opaque_id after upsert');
     }
   } catch (e: any) {
     return resp(502, `Failed to resolve user profile: ${e?.message ?? String(e)}`, {
