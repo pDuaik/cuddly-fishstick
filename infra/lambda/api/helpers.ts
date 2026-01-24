@@ -7,6 +7,8 @@ import {
   PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN,
 } from './platform-env';
 
+const DEBUG = (process.env.PLATFORM_DEBUG_LOGS ?? '').toLowerCase() === 'true';
+
 const secrets = new SecretsManagerClient({});
 
 /** Generic event shape this helper supports (HTTP API v2 + authorizer-like). */
@@ -221,47 +223,55 @@ export function buildPolicy(resource: string, expiresEpoch: number): Buffer {
 export function env(name: string, fallback = ''): string {
   const v = (process.env[name] ?? '').trim();
 
-  // Debug: show if present and length (don’t leak secrets)
-  console.log(`[env] ${name}: present=${!!v} len=${v.length} fallback=${fallback ? 'yes' : 'no'}`);
+  // Only log when explicitly debugging
+  if (DEBUG) {
+    console.log(`[env] ${name}: present=${!!v} len=${v.length} fallback=${fallback ? 'yes' : 'no'}`);
+  }
 
   return v || (fallback ?? '').trim();
 }
 
+
 export function requireEnv(name: string): string {
   const v = (process.env[name] ?? '').trim();
 
-  // Debug: show if present and length
-  console.log(`[requireEnv] ${name}: present=${!!v} len=${v.length}`);
-
   if (!v) {
-    // Debug: catch typos / missing CDK injection
-    console.log('[requireEnv] available env keys:', Object.keys(process.env).sort());
+    // Keep this (it’s useful and only happens on misconfig)
+    console.log(`[requireEnv] missing ${name}`);
     throw new Error(`Missing env: ${name}`);
   }
+
+  // Only log when explicitly debugging
+  if (DEBUG) console.log(`[requireEnv] ${name}: present=true len=${v.length}`);
+
   return v;
 }
+
 
 async function getOriginVerifyExpected(): Promise<string> {
   const arnOrName = env(PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN, '');
   if (!arnOrName) {
-    console.log('[origin-verify] SSM param not configured (PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN empty)');
+    if (DEBUG)
+      console.log('[origin-verify] SSM param not configured (PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN empty)');
     return '';
   }
 
   if (cached && cached.arnOrName === arnOrName) {
-    console.log('[origin-verify] using cached expected value', {
-      arnOrName,
-      expectedLen: cached.expected.length,
-    });
+    if (DEBUG) {
+      console.log('[origin-verify] using cached expected value', {
+        arnOrName,
+        expectedLen: cached.expected.length,
+      });
+    }
     return cached.expected;
   }
 
   const Name = ssmParamNameFromArnOrName(arnOrName);
-
-  console.log('[origin-verify] fetching expected from SSM', {
-    arnOrName,
-    resolvedName: Name,
-  });
+  if (DEBUG)
+    console.log('[origin-verify] fetching expected from SSM', {
+      arnOrName,
+      resolvedName: Name,
+    });
 
   const out = await ssm.send(
     new GetParameterCommand({
@@ -271,16 +281,16 @@ async function getOriginVerifyExpected(): Promise<string> {
   );
 
   const expected = (out.Parameter?.Value ?? '').trim();
-
-  console.log('[origin-verify] SSM response', {
-    resolvedName: Name,
-    hasParameter: !!out.Parameter,
-    hasValue: !!out.Parameter?.Value,
-    valueLen: expected.length,
-    // helpful when debugging region/account issues:
-    version: out.Parameter?.Version,
-    type: out.Parameter?.Type,
-  });
+  if (DEBUG)
+    console.log('[origin-verify] SSM response', {
+      resolvedName: Name,
+      hasParameter: !!out.Parameter,
+      hasValue: !!out.Parameter?.Value,
+      valueLen: expected.length,
+      // helpful when debugging region/account issues:
+      version: out.Parameter?.Version,
+      type: out.Parameter?.Type,
+    });
 
   cached = { arnOrName, expected };
   return expected;
@@ -329,7 +339,6 @@ export async function enforceOriginVerify(event: HeaderCookieEvent | any): Promi
     return { ok: false, statusCode: 403, message: 'Forbidden (bad origin verify header)' };
   }
 
-  console.log('[origin-verify] ok');
   return { ok: true };
 }
 
@@ -409,15 +418,16 @@ export async function loadPrivateKeyFromSecrets(secretArn: string): Promise<stri
   }
 
   // Safe diagnostics (no key leakage)
-  console.log('[secrets] private key loaded (safe metadata)', {
-    secretArn,
-    from,
-    len: raw.length,
-    startsWith: JSON.stringify(raw.slice(0, 30)),
-    hasBegin: raw.includes('BEGIN'),
-    hasPrivateKey: raw.includes('PRIVATE KEY'),
-    hasNewlines: raw.includes('\n'),
-  });
+  if (DEBUG) {
+    console.log('[secrets] private key loaded (safe metadata)', {
+      secretArn,
+      from,
+      len: raw.length,
+      hasBegin: raw.includes('BEGIN'),
+      hasPrivateKey: raw.includes('PRIVATE KEY'),
+      hasNewlines: raw.includes('\n'),
+    });
+  }
 
   if (!raw.includes('BEGIN') || !raw.includes('PRIVATE KEY') || !raw.includes('END')) {
     throw new Error('Secret does not look like a PEM private key');
