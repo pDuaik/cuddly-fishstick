@@ -9,6 +9,7 @@ export type SettingsFile = {
   enableWaf?: boolean;
 
   allowedFrameSrc?: string[];
+  allowedConnectSrc?: string[];
 
   domain: string;
   certArnUsEast1: string;

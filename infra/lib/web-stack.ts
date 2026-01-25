@@ -19,6 +19,7 @@ export interface WebStackProps extends cdk.StackProps {
   originVerifyHeaderValueParameterArn: string; // SSM parameter ARN (Type=String)  
 
   allowedFrameSrc?: string[];
+  allowedConnectSrc?: string[];
 }
 
 function ssmDynamicReferenceFromParamArn(paramArn: string, version?: number): string {
@@ -103,6 +104,11 @@ export class WebStack extends cdk.Stack {
       ...(props.allowedFrameSrc ?? []).map(validateCspSource),
     ].join(' ');
 
+    const connectSrc = [
+      "'self'",
+      ...(props.allowedConnectSrc ?? []).map(validateCspSource),
+    ].join(' ');
+
     const csp =
       "default-src 'self'; " +
       "base-uri 'self'; " +
@@ -113,7 +119,7 @@ export class WebStack extends cdk.Stack {
       "script-src 'self'; " +
       "style-src 'self'; " +
       "img-src 'self' data:; " +
-      "connect-src 'self'; " +
+      `connect-src ${connectSrc}; ` +
       "font-src 'self'; " +
       "upgrade-insecure-requests";
 

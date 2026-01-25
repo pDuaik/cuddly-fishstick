@@ -52,6 +52,10 @@ const allowedFrameSrc =
     ? settings.allowedFrameSrc.map(s => s.trim()).filter(Boolean)
     : [];
 
+const allowedConnectSrc =
+  Array.isArray(settings.allowedConnectSrc)
+    ? settings.allowedConnectSrc.map(s => s.trim()).filter(Boolean)
+    : [];
 
 // -------------------------
 // Stacks
@@ -101,5 +105,6 @@ new WebStack(app, `${config.projectName}-${config.stage}-web`, {
   originVerifyHeaderName,
   originVerifyHeaderValueParameterArn,
   allowedFrameSrc,
+  allowedConnectSrc,
 });
 
