@@ -6,7 +6,6 @@ import type * as cdk from 'aws-cdk-lib';
 export type SettingsFile = {
   projectName?: string;
   stage?: string;
-  enableWaf?: boolean;
 
   allowedFrameSrc?: string[];
   allowedConnectSrc?: string[];

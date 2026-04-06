@@ -15,12 +15,9 @@ const settings = readSettingsOrThrow(settingsAbs);
 const config: AppConfig = {
   projectName: (settings.projectName ?? ctx(app, 'projectName') ?? '').trim() || 'cuddly-fishstick',
   stage: (settings.stage ?? ctx(app, 'stage') ?? '').trim() || 'dev',
-  enableWaf: typeof settings.enableWaf === 'boolean' ? settings.enableWaf : ctxBool(app, 'enableWaf', false),
 
   domain: requireValue('domain', settings.domain),
   certArnUsEast1: requireValue('certArnUsEast1', settings.certArnUsEast1),
-
-  websitePath: 'website',
 };
 
 const originVerifyHeaderName =
