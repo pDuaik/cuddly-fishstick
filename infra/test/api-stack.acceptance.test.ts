@@ -31,6 +31,7 @@ function baseProps(scope: cdk.Stack) {
 
     cognitoDomain: 'auth.example.com',
     cognitoClientId: 'client-id',
+    cognitoUserPoolId: 'user-pool-id',
 
     cfPublicKeyId: 'K1234567890',
     cfPrivateKeySecretArn: 'arn:aws:secretsmanager:eu-west-2:123456789012:secret:test',
@@ -86,6 +87,7 @@ describe('ApiStack acceptance', () => {
 
       expect(registerSpy).toHaveBeenCalledTimes(1);
       expect(registerSpy.mock.calls[0]?.[0]).toBeTruthy();
+      expect(registerSpy.mock.calls[0]?.[0].platform.cognitoUserPoolId).toBe('user-pool-id');
     });
   });
 

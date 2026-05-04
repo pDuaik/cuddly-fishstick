@@ -35,6 +35,7 @@ export interface ApiStackProps extends cdk.StackProps {
 
   cognitoDomain: string;
   cognitoClientId: string;
+  cognitoUserPoolId: string;
 
   cfPublicKeyId: string;
   cfPrivateKeySecretArn: string;
@@ -63,6 +64,7 @@ export class ApiStack extends cdk.Stack {
 
     const cognitoDomain = requireNonEmpty('cognitoDomain', props.cognitoDomain);
     const cognitoClientId = requireNonEmpty('cognitoClientId', props.cognitoClientId);
+    const cognitoUserPoolId = requireNonEmpty('cognitoUserPoolId', props.cognitoUserPoolId);
 
     // ✅ Key Groups: Public Key ID (NOT legacy Trusted Signers "key pair id")
     const cfPublicKeyId = requireNonEmpty('cfPublicKeyId', props.cfPublicKeyId);
@@ -481,6 +483,9 @@ export const handler = secureHttp(business);
 
     const ctx: UserExtensionCtx = {
       featuresScope,
+      platform: {
+        cognitoUserPoolId,
+      },
       endpoint: { createUserEndpoint },
       api: { registerApiRoute },
     };

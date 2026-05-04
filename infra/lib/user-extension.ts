@@ -51,6 +51,14 @@ export type UserExtensionCtx = {
   featuresScope: Construct;
 
   /**
+   * Platform-owned values that user endpoints may need to integrate with
+   * resources created by the current deployment.
+   */
+  platform: {
+    cognitoUserPoolId: string;
+  };
+
+  /**
    * Endpoint factory:
    * creates a Lambda whose handler is platform-owned and ALWAYS wraps user business with secureHttp().
    */
