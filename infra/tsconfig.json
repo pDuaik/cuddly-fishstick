@@ -16,6 +16,8 @@
     "noUnusedParameters": false,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": false,
+    "outDir": "./dist",
+    "rootDir": ".",
     "inlineSourceMap": true,
     "inlineSources": true,
     "experimentalDecorators": true,
@@ -27,6 +29,7 @@
   },
   "exclude": [
     "node_modules",
-    "cdk.out"
+    "cdk.out",
+    "dist"
   ]
 }
