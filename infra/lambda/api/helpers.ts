@@ -358,9 +358,8 @@ export function signPolicyRsaSha1(privateKeyPem: string, message: Buffer): Buffe
   return signer.sign(keyObject);
 }
 
-export async function loadPrivateKeyFromSsm(parameterArn: string): Promise<string> {
-  const Name = ssmParamNameFromArnOrName(parameterArn);
-  const out = await ssm.send(new GetParameterCommand({ Name, WithDecryption: true }));
+export async function loadPrivateKeyFromSsm(paramName: string): Promise<string> {
+  const out = await ssm.send(new GetParameterCommand({ Name: paramName, WithDecryption: true }));
 
   let raw = (out.Parameter?.Value ?? '').trim();
   const from = 'SSM SecureString';
@@ -415,7 +414,7 @@ export async function loadPrivateKeyFromSsm(parameterArn: string): Promise<strin
   // Safe diagnostics (no key leakage)
   if (DEBUG) {
     console.log('[secrets] private key loaded (safe metadata)', {
-      parameterArn,
+      paramName,
       from,
       len: raw.length,
       hasBegin: raw.includes('BEGIN'),
