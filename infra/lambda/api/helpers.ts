@@ -1,5 +1,4 @@
 // helpers.ts
-import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import crypto from 'crypto';
 import {
@@ -8,8 +7,6 @@ import {
 } from './platform-env';
 
 const DEBUG = (process.env.PLATFORM_DEBUG_LOGS ?? '').toLowerCase() === 'true';
-
-const secrets = new SecretsManagerClient({});
 
 /** Generic event shape this helper supports (HTTP API v2 + authorizer-like). */
 export type HeaderCookieEvent = {
@@ -361,16 +358,14 @@ export function signPolicyRsaSha1(privateKeyPem: string, message: Buffer): Buffe
   return signer.sign(keyObject);
 }
 
-export async function loadPrivateKeyFromSecrets(secretArn: string): Promise<string> {
-  const out = await secrets.send(new GetSecretValueCommand({ SecretId: secretArn }));
+export async function loadPrivateKeyFromSsm(parameterArn: string): Promise<string> {
+  const Name = ssmParamNameFromArnOrName(parameterArn);
+  const out = await ssm.send(new GetParameterCommand({ Name, WithDecryption: true }));
 
-  let raw = (out.SecretString ?? '').trim();
-  const from = raw ? 'SecretString' : (out.SecretBinary ? 'SecretBinary' : 'empty');
+  let raw = (out.Parameter?.Value ?? '').trim();
+  const from = 'SSM SecureString';
 
-  if (!raw && out.SecretBinary) {
-    raw = Buffer.from(out.SecretBinary as any).toString('utf8').trim();
-  }
-  if (!raw) throw new Error('Secret value was empty');
+  if (!raw) throw new Error('Parameter value was empty');
 
   // If JSON, extract key field
   if (raw.startsWith('{')) {
@@ -420,7 +415,7 @@ export async function loadPrivateKeyFromSecrets(secretArn: string): Promise<stri
   // Safe diagnostics (no key leakage)
   if (DEBUG) {
     console.log('[secrets] private key loaded (safe metadata)', {
-      secretArn,
+      parameterArn,
       from,
       len: raw.length,
       hasBegin: raw.includes('BEGIN'),

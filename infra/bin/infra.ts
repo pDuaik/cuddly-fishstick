@@ -30,7 +30,7 @@ const originVerifyHeaderValueParameterArn = requireValue(
 
 const cfPublicKeyId = requireValue('cfPublicKeyId', settings.cfPublicKeyId);
 
-const cfPrivateKeySecretArn = requireValue('cfPrivateKeySecretArn', settings.cfPrivateKeySecretArn);
+const cfPrivateKeyParameterArn = requireValue('cfPrivateKeyParameterArn', settings.cfPrivateKeyParameterArn);
 const cfCookieDomain = requireValue('cfCookieDomain', settings.cfCookieDomain);
 
 const cfCookiePath = (settings.cfCookiePath ?? '/').toString().trim() || '/';
@@ -79,7 +79,7 @@ const api = new ApiStack(app, `${config.projectName}-${config.stage}-api`, {
   cognitoClientId: auth.userPoolClient.userPoolClientId,
   cognitoUserPoolId: auth.userPool.userPoolId,
   cfPublicKeyId,
-  cfPrivateKeySecretArn,
+  cfPrivateKeyParameterArn,
   cfCookieDomain,
   cfCookiePath,
   cfCookieTtlSeconds,

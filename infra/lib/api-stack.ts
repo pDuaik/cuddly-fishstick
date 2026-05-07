@@ -38,7 +38,7 @@ export interface ApiStackProps extends cdk.StackProps {
   cognitoUserPoolId: string;
 
   cfPublicKeyId: string;
-  cfPrivateKeySecretArn: string;
+  cfPrivateKeyParameterArn: string;
 
   cfCookieDomain: string;
   cfCookiePath?: string; // default "/"
@@ -68,7 +68,7 @@ export class ApiStack extends cdk.Stack {
 
     // ✅ Key Groups: Public Key ID (NOT legacy Trusted Signers "key pair id")
     const cfPublicKeyId = requireNonEmpty('cfPublicKeyId', props.cfPublicKeyId);
-    const cfPrivateKeySecretArn = requireNonEmpty('cfPrivateKeySecretArn', props.cfPrivateKeySecretArn);
+    const cfPrivateKeyParameterArn = requireNonEmpty('cfPrivateKeyParameterArn', props.cfPrivateKeyParameterArn);
     const cfCookieDomain = requireNonEmpty('cfCookieDomain', props.cfCookieDomain);
 
     const originVerifyHeaderName = (props.originVerifyHeaderName || 'X-Origin-Verify').trim() || 'X-Origin-Verify';
@@ -165,7 +165,7 @@ export class ApiStack extends cdk.Stack {
 
         CF_PUBLIC_KEY_ID: cfPublicKeyId,
 
-        CF_PRIVATE_KEY_SECRET_ARN: cfPrivateKeySecretArn,
+        CF_PRIVATE_KEY_PARAMETER_ARN: cfPrivateKeyParameterArn,
         CF_COOKIE_DOMAIN: cfCookieDomain,
         CF_COOKIE_PATH: cfCookiePath,
 
@@ -186,8 +186,8 @@ export class ApiStack extends cdk.Stack {
 
     authCallbackFn.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['secretsmanager:GetSecretValue'],
-        resources: [cfPrivateKeySecretArn],
+        actions: ['ssm:GetParameter'],
+        resources: [cfPrivateKeyParameterArn],
       }),
     );
 

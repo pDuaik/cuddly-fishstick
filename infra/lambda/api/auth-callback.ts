@@ -14,7 +14,7 @@ import {
   safePostLoginRedirect,
   resp,
   buildCookie,
-  loadPrivateKeyFromSecrets,
+  loadPrivateKeyFromSsm,
   buildPolicy,
   signPolicyRsaSha1,
   cfB64,
@@ -64,7 +64,7 @@ export async function handler(event: any) {
 
   // CloudFront signed cookies (Key Groups)
   const cfPublicKeyId = env('CF_PUBLIC_KEY_ID', '');
-  const cfPrivateKeySecretArn = env('CF_PRIVATE_KEY_SECRET_ARN', '');
+  const cfPrivateKeyParameterArn = env('CF_PRIVATE_KEY_PARAMETER_ARN', '');
   const cfCookieDomain = env('CF_COOKIE_DOMAIN', '');
   const cfCookiePath = env('CF_COOKIE_PATH', '/') || '/';
   const cfCookieTtlSeconds = Number.parseInt(env('CF_COOKIE_TTL_SECONDS', String(ttlSeconds)), 10) || ttlSeconds;
@@ -262,13 +262,13 @@ export async function handler(event: any) {
   void csrfHeaderName; // reserved for future CSRF header checks on write endpoints
 
   // 3) CloudFront signed cookies (strict: must be configured)
-  if (!cfPublicKeyId || !cfPrivateKeySecretArn) {
+  if (!cfPublicKeyId || !cfPrivateKeyParameterArn) {
     cookiesOut.push(...clearTempCookies());
     return resp(500, 'Server misconfigured: CloudFront Key Group signing not configured', { cookies: cookiesOut });
   }
 
   try {
-    const privateKeyPem = await loadPrivateKeyFromSecrets(cfPrivateKeySecretArn);
+    const privateKeyPem = await loadPrivateKeyFromSsm(cfPrivateKeyParameterArn);
 
     const cfExpires = now + cfCookieTtlSeconds;
 

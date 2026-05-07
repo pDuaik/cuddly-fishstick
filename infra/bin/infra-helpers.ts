@@ -15,7 +15,7 @@ export type SettingsFile = {
 
   cfPublicKeyId: string;
 
-  cfPrivateKeySecretArn: string;
+  cfPrivateKeyParameterArn: string;
 
   cfCookieDomain: string;
   cfCookiePath?: string;

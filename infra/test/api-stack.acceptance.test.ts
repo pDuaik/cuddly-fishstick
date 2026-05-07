@@ -34,7 +34,7 @@ function baseProps(scope: cdk.Stack) {
     cognitoUserPoolId: 'user-pool-id',
 
     cfPublicKeyId: 'K1234567890',
-    cfPrivateKeySecretArn: 'arn:aws:secretsmanager:eu-west-2:123456789012:secret:test',
+    cfPrivateKeyParameterArn: 'arn:aws:ssm:eu-west-2:123456789012:parameter/test',
     cfCookieDomain: 'example.com',
 
     originVerifyHeaderName: 'X-Origin-Verify',
