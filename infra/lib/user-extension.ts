@@ -56,8 +56,6 @@ export type UserExtensionCtx = {
    */
   platform: {
     cognitoUserPoolId: string;
-    /** DynamoDB table name for the platform session store. */
-    sessionsTableName: string;
   };
 
   /**

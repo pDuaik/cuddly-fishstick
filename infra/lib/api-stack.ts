@@ -485,7 +485,6 @@ export const handler = secureHttp(business);
       featuresScope,
       platform: {
         cognitoUserPoolId,
-        sessionsTableName: props.sessionsTable.tableName,
       },
       endpoint: { createUserEndpoint },
       api: { registerApiRoute },
