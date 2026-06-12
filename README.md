@@ -257,16 +257,20 @@ Example:
 
 *   Create endpoints with `ctx.endpoint.createUserEndpoint({...})`
 *   Register routes with `ctx.api.registerApiRoute({...})`
+*   Create public endpoints with `ctx.publicEndpoint.createPublicEndpoint({...})`
+*   Register public routes with `ctx.publicApi.registerPublicApiRoute({...})`
 
 Rules enforced by the platform:
 
 *   Paths must be under `/api/`.
+*   Public paths must be under `/api/public/`.
 *   `/auth/*` is reserved.
 *   Methods are allowlisted.
 *   Required platform environment variables cannot be overridden.
 *   Keys starting with the platform prefix are reserved.
 *   All user endpoints are automatically authenticated.
 *   CSRF is enforced automatically for unsafe methods.
+*   Public endpoints are unauthenticated, read-only (`GET`, `HEAD`, `OPTIONS`), and still enforce CloudFront origin verification.
 
 Your business code stays clean:
 
@@ -277,6 +281,29 @@ export const business: SecureHttpBusinessFn = async (ctx, input) => {
     user_sub: ctx.user_sub,
     received: input.body ?? null,
   };
+};
+```
+
+Public endpoint example:
+
+```ts
+const publicPingFn = ctx.publicEndpoint.createPublicEndpoint({
+  id: "PublicPing",
+  entryRelativeToUserDir: "public-ping.ts",
+});
+
+ctx.publicApi.registerPublicApiRoute({
+  path: "/api/public/ping",
+  methods: ["GET", "HEAD", "OPTIONS"],
+  fn: publicPingFn,
+});
+```
+
+Public handlers export a `PublicHttpBusinessFn`:
+
+```ts
+export const business: PublicHttpBusinessFn = async () => {
+  return { message: "public ok" };
 };
 ```
 

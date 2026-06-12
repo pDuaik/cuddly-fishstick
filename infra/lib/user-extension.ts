@@ -7,6 +7,7 @@ import type { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
  * (Validated again at runtime in ApiStack registrar.)
  */
 export type UserApiMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD';
+export type PublicUserApiMethod = 'GET' | 'OPTIONS' | 'HEAD';
 
 export type RegisterApiRouteInput = {
   /**
@@ -22,6 +23,24 @@ export type RegisterApiRouteInput = {
 
   /**
    * Lambda created by ctx.endpoint.createUserEndpoint().
+   */
+  fn: NodejsFunction;
+};
+
+export type RegisterPublicApiRouteInput = {
+  /**
+   * Must start with "/api/public/".
+   * Public routes are unauthenticated, so keep this namespace narrow.
+   */
+  path: string;
+
+  /**
+   * Public routes are intentionally read-only.
+   */
+  methods: PublicUserApiMethod[];
+
+  /**
+   * Lambda created by ctx.publicEndpoint.createPublicEndpoint().
    */
   fn: NodejsFunction;
 };
@@ -67,11 +86,29 @@ export type UserExtensionCtx = {
   };
 
   /**
+   * Public endpoint factory:
+   * creates a Lambda whose handler is platform-owned and ALWAYS wraps user business with publicHttp().
+   *
+   * Public endpoints are not authenticated. They still enforce CloudFront origin verification.
+   */
+  publicEndpoint: {
+    createPublicEndpoint(input: CreateUserEndpointInput): NodejsFunction;
+  };
+
+  /**
    * Route registrar:
    * registers /api/* routes and ALWAYS attaches the existing session authorizer.
    */
   api: {
     registerApiRoute(input: RegisterApiRouteInput): void;
+  };
+
+  /**
+   * Public route registrar:
+   * registers unauthenticated /api/public/* routes without the session authorizer.
+   */
+  publicApi: {
+    registerPublicApiRoute(input: RegisterPublicApiRouteInput): void;
   };
 };
 
