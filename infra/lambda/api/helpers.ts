@@ -1,6 +1,6 @@
 // helpers.ts
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
-import crypto from 'crypto';
+import * as crypto from 'crypto';
 import {
   PLATFORM_ORIGIN_VERIFY_HEADER_NAME,
   PLATFORM_ORIGIN_VERIFY_HEADER_VALUE_SSM_PARAM_ARN,
@@ -83,8 +83,9 @@ export function buildCookie(
 
 const ssm = new SSMClient({});
 
-// cache across warm invocations
-let cached: { arnOrName: string; expected: string } | null = null;
+// Bound warm-instance caching so parameter updates take effect without a cold start.
+const ORIGIN_VERIFY_CACHE_TTL_MS = 60_000;
+let cached: { arnOrName: string; expected: string; expiresAt: number } | null = null;
 
 function ssmParamNameFromArnOrName(arnOrName: string): string {
   const s = (arnOrName ?? '').trim();
@@ -155,48 +156,70 @@ function b64urlDecodeToBuffer(input: string): Buffer {
 
 export function decodeJwtPayload(token: string): Record<string, any> {
   const parts = token.split('.');
-  if (parts.length < 2) return {};
+  if (parts.length !== 3 || parts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part))) return {};
   try {
     const buf = b64urlDecodeToBuffer(parts[1]);
-    return JSON.parse(buf.toString('utf8')) as Record<string, any>;
+    const value: unknown = JSON.parse(buf.toString('utf8'));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
   } catch {
     return {};
   }
 }
 
+/**
+ * Validate an ID token obtained directly from the configured Cognito HTTPS token
+ * endpoint. TLS authenticates that response; this is NOT a signature verifier
+ * and must never be used to authenticate a token supplied by a browser/client.
+ */
+export function validateCognitoIdToken(
+  token: string,
+  issuer: string,
+  clientId: string,
+  nowEpoch = Math.floor(Date.now() / 1000),
+): Record<string, any> {
+  const claims = decodeJwtPayload(token);
+  if (!issuer || !clientId || claims.iss !== issuer || claims.aud !== clientId || claims.token_use !== 'id' ||
+      typeof claims.exp !== 'number' || !Number.isSafeInteger(claims.exp) || claims.exp <= nowEpoch ||
+      typeof claims.iat !== 'number' || !Number.isSafeInteger(claims.iat) || claims.iat < 0 ||
+      claims.iat > nowEpoch + 60 || claims.iat >= claims.exp ||
+      typeof claims.sub !== 'string' || !claims.sub.trim() || claims.sub === 'unknown') {
+    throw new Error('Invalid Cognito ID token claims');
+  }
+  return claims;
+}
+
 export function safePostLoginRedirect(raw: string, defaultPath: string, appHost: string): string {
-  let s = (raw ?? '').trim();
-  if (!s) return defaultPath;
-
-  try {
-    s = decodeURIComponent(s);
-  } catch {
-    // ignore
-  }
-
-  if (s.startsWith('/')) {
-    if (s.startsWith('//')) return defaultPath;
-    if (s.toLowerCase().includes('://')) return defaultPath;
-    return s;
-  }
-
-  try {
-    const u = new URL(s);
-    if ((u.protocol === 'https:' || u.protocol === 'http:') && u.host.toLowerCase() === appHost.toLowerCase()) {
-      return `${u.pathname || '/'}${u.search || ''}${u.hash || ''}`;
+  // Inputs are already decoded by API Gateway (query) or the callback (cookie).
+  // Never decode URL path escapes here: doing so changes the target's meaning.
+  const normalize = (value: string): string | null => {
+    if (!value || /[\u0000-\u001f\u007f\\]/.test(value)) return null;
+    const candidate = value.trim();
+    if (!candidate || candidate.startsWith('//')) return null;
+    if (!candidate.startsWith('/') && !candidate.toLowerCase().startsWith('https://')) return null;
+    try {
+      const origin = new URL(`https://${appHost}`);
+      const target = new URL(candidate, origin);
+      if (target.origin !== origin.origin || target.username || target.password) return null;
+      // A same-origin URL can normalize to //host; returning that as Location
+      // would reinterpret it as an external scheme-relative URL.
+      if (target.pathname.startsWith('//')) return null;
+      return `${target.pathname}${target.search}${target.hash}`;
+    } catch {
+      return null;
     }
-  } catch {
-    // ignore
-  }
-
-  return defaultPath;
+  };
+  return normalize(raw) ?? normalize(defaultPath) ?? '/';
 }
 
 export function safeAbsoluteHttpsUrl(raw: string, fallback: string): string {
   const v = (raw ?? '').trim();
-  if (!v) return fallback;
-  if (!v.toLowerCase().startsWith('https://')) return fallback;
-  return v;
+  if (!v || /[\u0000-\u001f\u007f\\]/.test(v)) return fallback;
+  try {
+    const url = new URL(v);
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export function cfB64(data: Buffer): string {
@@ -253,7 +276,7 @@ async function getOriginVerifyExpected(): Promise<string> {
     return '';
   }
 
-  if (cached && cached.arnOrName === arnOrName) {
+  if (cached && cached.arnOrName === arnOrName && Date.now() < cached.expiresAt) {
     if (DEBUG) {
       console.log('[origin-verify] using cached expected value', {
         arnOrName,
@@ -289,8 +312,21 @@ async function getOriginVerifyExpected(): Promise<string> {
       type: out.Parameter?.Type,
     });
 
-  cached = { arnOrName, expected };
+  cached = { arnOrName, expected, expiresAt: Date.now() + ORIGIN_VERIFY_CACHE_TTL_MS };
   return expected;
+}
+
+/** Authenticate the user-prefix selector consumed by the CloudFront function. */
+export async function signUserCookie(opaqueId: string, expiresEpoch: number, appHost: string): Promise<string> {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(opaqueId) || !Number.isSafeInteger(expiresEpoch) ||
+      expiresEpoch <= Math.floor(Date.now() / 1000) || !appHost || /[\r\n]/.test(appHost)) {
+    throw new Error('Invalid user cookie identity, host, or expiry');
+  }
+  const secret = await getOriginVerifyExpected();
+  if (!secret) throw new Error('User cookie signing key unavailable');
+  const message = `user-cookie:v1\n${appHost.toLowerCase()}\n${opaqueId}\n${expiresEpoch}`;
+  const signature = crypto.createHmac('sha256', secret).update(message).digest('hex');
+  return `${opaqueId}.${expiresEpoch}.${signature}`;
 }
 
 export async function enforceOriginVerify(event: HeaderCookieEvent | any): Promise<OriginVerifyResult> {

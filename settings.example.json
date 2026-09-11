@@ -1,0 +1,15 @@
+{
+  "projectName": "cuddly-fishstick",
+  "stage": "dev",
+  "domain": "example.com",
+  "certArnUsEast1": "arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000",
+  "cfPublicKeyId": "KEXAMPLE123456",
+  "cfPrivateKeyParameterArn": "arn:aws:ssm:eu-west-2:123456789012:parameter/cuddly-fishstick/dev/cloudfront-private-key",
+  "cfCookieDomain": "example.com",
+  "cfCookiePath": "/",
+  "cfCookieTtlSeconds": 3600,
+  "originVerifyHeaderName": "X-Origin-Verify",
+  "originVerifyHeaderValueParameterArn": "arn:aws:ssm:eu-west-2:123456789012:parameter/cuddly-fishstick/dev/origin-verify",
+  "allowedFrameSrc": [],
+  "allowedConnectSrc": []
+}

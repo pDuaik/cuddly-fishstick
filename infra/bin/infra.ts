@@ -5,7 +5,7 @@ import { AuthStack } from '../lib/auth-stack';
 import { ApiStack } from '../lib/api-stack';
 import { WebStack } from '../lib/web-stack';
 import type { AppConfig } from '../lib/config';
-import { settingsPath, readSettingsOrThrow, requireValue, ctx, ctxBool } from './infra-helpers';
+import { settingsPath, readSettingsOrThrow, requireValue, ctx } from './infra-helpers';
 
 const app = new cdk.App();
 

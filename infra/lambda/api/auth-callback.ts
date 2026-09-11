@@ -3,26 +3,26 @@
 
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
-import crypto from 'crypto';
+import * as crypto from 'crypto';
 
 import {
   enforceOriginVerify,
   requireEnv,
   env,
   getCookie,
-  decodeJwtPayload,
+  validateCognitoIdToken,
   safePostLoginRedirect,
   resp,
   buildCookie,
   loadPrivateKeyFromSsm,
   buildPolicy,
   signPolicyRsaSha1,
+  signUserCookie,
   cfB64,
 } from './helpers';
 
 import {
   PLATFORM_CSRF_COOKIE_NAME,
-  PLATFORM_CSRF_HEADER_NAME,
 } from './platform-env';
 
 
@@ -44,13 +44,13 @@ export async function handler(event: any) {
   const cookieName = env('COOKIE_NAME', 'session') || 'session';
 
   const csrfCookieName = env(PLATFORM_CSRF_COOKIE_NAME, '__Host-csrf') || '__Host-csrf';
-  const csrfHeaderName = env(PLATFORM_CSRF_HEADER_NAME, 'X-CSRF-Token') || 'X-CSRF-Token';
 
   // Opaque user key cookie (stable per user, NOT Cognito sub)
   const opaqueCookieName = env('OPAQUE_ID_COOKIE_NAME', '__Host-uk') || '__Host-uk';
 
   const cognitoDomain = requireEnv('COGNITO_DOMAIN');
   const clientId = requireEnv('COGNITO_CLIENT_ID');
+  const cognitoIssuer = requireEnv('COGNITO_ISSUER');
   const redirectUri = requireEnv('REDIRECT_URI');
 
   const ttlSeconds = Number.parseInt(env('SESSION_TTL_SECONDS', '3600'), 10) || 3600;
@@ -108,8 +108,19 @@ export async function handler(event: any) {
     return resp(400, 'State mismatch', { cookies: clearTempCookies() });
   }
 
-  const rawPostLogin = getCookie(event, postLoginCookieName) || '';
+  let rawPostLogin = '';
+  try {
+    rawPostLogin = decodeURIComponent(getCookie(event, postLoginCookieName));
+  } catch {
+    // A malformed cookie falls back to the configured same-origin landing page.
+  }
   const postLoginRedirect = safePostLoginRedirect(rawPostLogin, defaultPostLogin, appHost || '');
+
+  if (!cfPublicKeyId || !cfPrivateKeyParameterArn) {
+    return resp(500, 'Server misconfigured: CloudFront Key Group signing not configured', {
+      cookies: clearTempCookies(),
+    });
+  }
 
   // ------------------------------------------------------------
   // Exchange code for tokens
@@ -129,6 +140,10 @@ export async function handler(event: any) {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: form.toString(),
+      // Claims below are trusted only because this response comes directly
+      // from the configured Cognito HTTPS endpoint, without redirects.
+      redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
     });
 
     const text = await r.text();
@@ -142,14 +157,15 @@ export async function handler(event: any) {
       throw new Error(`HTTP ${r.status}`);
     }
   } catch (e: any) {
-    return resp(502, `Token exchange failed: ${e?.message ?? String(e)}`, {
+    console.log('[auth-callback] token exchange failed', { name: e?.name });
+    return resp(502, 'Token exchange failed', {
       cookies: clearTempCookies(),
     });
   }
 
-  const idToken = payload?.id_token as string | undefined;
-  const accessToken = payload?.access_token as string | undefined;
-  const refreshToken = (payload?.refresh_token as string | undefined) ?? '';
+  const idToken = typeof payload?.id_token === 'string' ? payload.id_token : '';
+  const accessToken = typeof payload?.access_token === 'string' ? payload.access_token : '';
+  const refreshToken = typeof payload?.refresh_token === 'string' ? payload.refresh_token : '';
 
   if (!idToken || !accessToken) {
     // Log only non-sensitive diagnostics (never token values)
@@ -166,10 +182,15 @@ export async function handler(event: any) {
     });
   }
 
-  const claims = decodeJwtPayload(idToken);
-  const userSub = (claims?.sub as string) || 'unknown';
-
   const now = Math.floor(Date.now() / 1000);
+  let userSub: string;
+  try {
+    userSub = validateCognitoIdToken(idToken, cognitoIssuer, clientId, now).sub;
+  } catch {
+    console.log('[auth-callback] token response contained invalid ID token claims');
+    return resp(502, 'Token exchange failed (invalid ID token)', { cookies: clearTempCookies() });
+  }
+
   const expiresAt = now + ttlSeconds;
   const sessionId = crypto.randomUUID().replace(/-/g, '');
 
@@ -201,45 +222,19 @@ export async function handler(event: any) {
       throw new Error('User profile missing opaque_id after upsert');
     }
   } catch (e: any) {
-    return resp(502, `Failed to resolve user profile: ${e?.message ?? String(e)}`, {
+    console.log('[auth-callback] failed to resolve user profile', { name: e?.name });
+    return resp(502, 'Failed to resolve user profile', {
       cookies: clearTempCookies(),
     });
   }
 
-  // ------------------------------------------------------------
-  // Create session (TTL)
-  // ------------------------------------------------------------
-  await ddb.send(
-    new PutCommand({
-      TableName: sessionsTableName,
-      Item: {
-        session_id: sessionId,
-        user_sub: userSub,
-        created_at: now,
-        expires_at: expiresAt,
-        access_token: accessToken,
-        refresh_token: refreshToken,
-        id_token: idToken,
-      },
-    }),
-  );
-
+  // Prepare credentials before persisting a usable session. No credentials
+  // are returned until both signing and the session write have succeeded.
   const cookiesOut: string[] = [];
 
   // 1) App session cookie (HttpOnly)
   cookiesOut.push(
     buildCookie(cookieName, sessionId, {
-      path: '/',
-      httpOnly: true,
-      secure: true,
-      sameSite: 'Lax',
-      maxAge: ttlSeconds,
-    }),
-  );
-
-  // 1b) Opaque user key cookie (HttpOnly, stable per user)
-  cookiesOut.push(
-    buildCookie(opaqueCookieName, opaqueId, {
       path: '/',
       httpOnly: true,
       secure: true,
@@ -259,20 +254,25 @@ export async function handler(event: any) {
       maxAge: ttlSeconds,
     }),
   );
-  void csrfHeaderName; // reserved for future CSRF header checks on write endpoints
 
-  // 3) CloudFront signed cookies (strict: must be configured)
-  if (!cfPublicKeyId || !cfPrivateKeyParameterArn) {
-    cookiesOut.push(...clearTempCookies());
-    return resp(500, 'Server misconfigured: CloudFront Key Group signing not configured', { cookies: cookiesOut });
-  }
-
+  // 3) CloudFront signed cookies
   try {
     const privateKeyPem = await loadPrivateKeyFromSsm(cfPrivateKeyParameterArn);
 
+    // Bind the private S3 prefix to this authenticated identity. The edge
+    // verifies this MAC before trusting the cookie's user selector.
+    const userCookieTtl = Math.min(ttlSeconds, cfCookieTtlSeconds);
+    const authenticatedUserCookie = await signUserCookie(opaqueId, now + userCookieTtl, appHost);
+    cookiesOut.push(buildCookie(opaqueCookieName, authenticatedUserCookie, {
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Lax',
+      maxAge: userCookieTtl,
+    }));
+
     const cfExpires = now + cfCookieTtlSeconds;
 
-    // ✅ Multi-resource policy: /app/* AND /u/*
     const policyBytes = buildPolicy(cfAppResource, cfExpires);
 
     const signatureBytes = signPolicyRsaSha1(privateKeyPem, policyBytes);
@@ -302,8 +302,28 @@ export async function handler(event: any) {
       requestId: e?.$metadata?.requestId,
     });
 
-    cookiesOut.push(...clearTempCookies());
-    return resp(502, `Failed to mint CloudFront signed cookies: ${e?.message ?? String(e)}`, { cookies: cookiesOut });
+    return resp(502, 'Failed to mint CloudFront signed cookies', { cookies: clearTempCookies() });
+  }
+
+  try {
+    await ddb.send(
+      new PutCommand({
+        TableName: sessionsTableName,
+        Item: {
+          session_id: sessionId,
+          user_sub: userSub,
+          created_at: now,
+          expires_at: expiresAt,
+          access_token: accessToken,
+          refresh_token: refreshToken,
+          id_token: idToken,
+        },
+        ConditionExpression: 'attribute_not_exists(session_id)',
+      }),
+    );
+  } catch (e: any) {
+    console.log('[auth-callback] failed to create session', { name: e?.name });
+    return resp(503, 'Failed to create session; please start login again', { cookies: clearTempCookies() });
   }
 
   // 4) Clear temp auth cookies

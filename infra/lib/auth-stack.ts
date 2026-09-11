@@ -2,11 +2,12 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
-import type { AppConfig } from './config';
+import { AppConfig, defaultRemovalPolicy } from './config';
 
 export interface AuthStackProps extends cdk.StackProps {
   config: AppConfig;
   certArnUsEast1: string;
+  removalPolicy?: cdk.RemovalPolicy;
 }
 
 /**
@@ -32,6 +33,9 @@ export class AuthStack extends cdk.Stack {
 
   /** Derived auth domain, e.g. auth.example.com */
   public readonly cognitoAuthDomain: string;
+
+  /** DNS alias target for the Cognito custom domain, separate from the app distribution. */
+  public readonly cognitoCloudFrontDistribution: string;
 
   constructor(scope: Construct, id: string, props: AuthStackProps) {
     super(scope, id, props);
@@ -73,7 +77,7 @@ export class AuthStack extends cdk.Stack {
         requireSymbols: false,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: cdk.RemovalPolicy.DESTROY, // dev/POC friendly
+      removalPolicy: props.removalPolicy ?? defaultRemovalPolicy(stage),
     });
 
     // ---------------------------------------------------------------------
@@ -104,7 +108,7 @@ export class AuthStack extends cdk.Stack {
 
     // ---------------------------------------------------------------------
     // Cognito custom domain: auth.<rootDomain>
-    // Requires ACM certificate ARN in same region as this stack.
+    // Requires an ACM certificate in us-east-1, even when this stack is deployed elsewhere.
     // ---------------------------------------------------------------------
     const domainRes = new cognito.CfnUserPoolDomain(this, 'UserPoolDomain', {
       domain: this.cognitoAuthDomain,
@@ -114,6 +118,7 @@ export class AuthStack extends cdk.Stack {
       },
     });
     domainRes.node.addDependency(this.userPool);
+    this.cognitoCloudFrontDistribution = domainRes.attrCloudFrontDistribution;
 
     // Issuer URL (useful for verification / docs)
     this.issuerUrl = `https://cognito-idp.${this.region}.amazonaws.com/${this.userPool.userPoolId}`;
@@ -130,6 +135,7 @@ export class AuthStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'LogoutUrl', { value: logoutUrls[0] });
 
     new cdk.CfnOutput(this, 'CognitoAuthDomain', { value: this.cognitoAuthDomain });
+    new cdk.CfnOutput(this, 'CognitoCloudFrontDistribution', { value: this.cognitoCloudFrontDistribution });
     new cdk.CfnOutput(this, 'HostedUiBaseUrl', { value: this.hostedUiBaseUrl });
     new cdk.CfnOutput(this, 'AuthorizeEndpoint', { value: `${this.hostedUiBaseUrl}/oauth2/authorize` });
     new cdk.CfnOutput(this, 'TokenEndpoint', { value: `${this.hostedUiBaseUrl}/oauth2/token` });

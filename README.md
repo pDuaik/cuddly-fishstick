@@ -1,320 +1,124 @@
 # cuddly-fishstick
 
-cuddly-fishstick is a production-grade serverless web foundation for developers who think with AI.
+A reusable AWS CDK template for static websites with Cognito login, server-side API sessions, and CloudFront-protected content.
 
-It provides a secure, cost-effective AWS backend with strict boundaries and fail-closed defaults, while deliberately exposing web primitives (HTML, CSS, and JavaScript) without framework-level abstraction.
+The repository contains infrastructure and example API business functions. Website files and their upload workflow belong to the consuming project. Each deployment serves one configured app domain.
 
-The platform exists to protect identity, trust, and isolation, so you can focus on building the website and logic without compromising security.
+## Architecture
 
-## Philosophy
+Four stacks separate responsibilities:
 
-Modern AI is not a feature. It is a cognitive extension.
+- **DataStack:** private site/user S3 buckets, a DynamoDB sessions table with TTL, and a user-profile table mapping Cognito subjects to stable opaque IDs.
+- **AuthStack:** Cognito user pool, OAuth authorization-code client, and Hosted UI custom domain.
+- **ApiStack:** auth handlers, HTTP API, session authorizer, shared HTTP wrappers, and application extensions.
+- **WebStack:** CloudFront, OAC, signed-cookie key group, response headers, user-path verification, and the two consolidated bucket policies.
 
-This project is built for the augmented mind: people who use AI to reason, explore, and build deliberately.
+| Viewer path | Origin | Access |
+| --- | --- | --- |
+| Default, including / | Site S3 | Public; normal CDN caching |
+| /config/* | Site S3 | Public; no-store |
+| /app/* | Site S3 | CloudFront signed cookies; no-store |
+| /u/me/* | Users S3 | CloudFront signed cookies plus an authenticated user-selection cookie; no-store |
+| /auth/* | HTTP API | Origin verification and route-specific OAuth checks |
+| Private /api/* | HTTP API | Origin verification, server-side session, CSRF on unsafe methods |
+| /api/public/* | HTTP API | Origin verification; unauthenticated GET/HEAD/OPTIONS |
 
-Platforms should not sell intelligence back to users. The job is to provide structure, guardrails, and legible primitives so you can create without breaking the system.
+All S3 buckets block public access. Their policies grant CloudFront read access only to the deployment's distribution through OAC. API Gateway remains network-reachable; Lambda handlers reject requests without the CloudFront-injected origin secret. This check is separate from the session check.
 
-**Freedom inside the box. Safety at the edges.**
+The edge function authenticates the opaque user ID, expiry and app host using HMAC-SHA256 before rewriting /u/me/* to /u/<opaque>/*. A modified or unsigned cookie, expired cookie, direct opaque path or traversal path is rejected. The HMAC uses the existing origin-verification secret with a distinct message purpose. That secret is therefore part of the trust boundary for both origin verification and per-user static reads.
 
-## What this is
+## Authentication and sessions
 
-A secure, production-grade serverless baseline for shipping websites and small products without inheriting architectural debt.
+Login starts at /auth/start, creates short-lived state/PKCE cookies and redirects to Cognito. Callback exchanges the code directly with Cognito over HTTPS, validates the ID-token claims, resolves the user profile and prepares signed cookies before persisting a session.
 
-The system is built around a strict separation of responsibility:
-*   The platform owns security boundaries. Identity, sessions, origin trust, CSRF, isolation, and fail-closed defaults are enforced centrally and cannot be bypassed.
-*   You own the experience and business logic. HTML, CSS, JavaScript, and application behavior remain fully under your control, without framework-level abstraction.
+Cognito access, ID and refresh tokens stay in DynamoDB. The browser receives an HttpOnly session cookie, an authenticated HttpOnly user-selection cookie, a readable CSRF cookie and the CloudFront signed-cookie set. Private API routes perform strongly consistent session reads with authorizer caching disabled.
 
-It includes a user extension model that lets you add authenticated /api/* endpoints safely, using Lambda functions as glue without re-implementing or weakening the security model.
+The default session and signed-cookie lifetime is one hour, configurable with cfCookieTtlSeconds. Cognito access/ID tokens last fifteen minutes. Refresh tokens are stored, but automatic refresh is not implemented.
 
-## Who this is for (and who it is not)
-
-This project is not about building faster by hiding complexity. It removes unnecessary abstraction so the developer remains responsible for logic and intent, while the infrastructure provides guardrails that make mistakes hard and violations fail closed.
-
-Accordingly, this is not:
-*   Next.js
-*   Vercel
-*   A CMS
-*   Low-code or no-code
-*   Prompt-only application building
-*   Beginner-friendly tooling
-*   A replacement for learning how the web works
-
-This is for builders who want clarity over convenience, responsibility over automation, and control without sacrificing safety.
-
-## Threat model (the assumptions)
-
-This template assumes:
-*   The browser is untrusted.
-*   The network is untrusted.
-*   User code is fallible.
-*   Any missing control must fail closed.
-
-And it designs accordingly:
-*   CloudFront is part of the security boundary, not just a CDN.
-*   Direct origin access is treated as hostile.
-*   Auth is centralized.
-*   CSRF is enforced centrally.
-*   User endpoints cannot bypass platform checks.
-
-## Architecture at a glance
-
-### Request lifecycle
-
-1. **Browser → CloudFront**
-1. CloudFront enforces:
-     *   Signed cookies for protected paths
-     *   Strict response security headers
-1. **CloudFront → API Gateway** includes an **origin verify header** (secret in SSM)
-1. **API Gateway Lambda Authorizer** validates session cookie against DynamoDB
-1. **secureHttp() wrapper** enforces:
-     *   Origin verification (CloudFront-only)
-     *   Auth context presence
-     *   CSRF token match for unsafe methods
-     *   JSON body parsing + safe response shape
-1. Your business code runs with a minimal, explicit context
-
-### Storage
-
-*   **DynamoDB**
-    *   `sessions` table with TTL
-    *   `user-profile` table for stable opaque user IDs
-*   **S3**
-    *   `siteBucket` for static site content
-    *   `usersBucket` for per-user artifacts (`/u/*`, theme files)
-
-## Repository layout
-
-This repository contains **infra only**. I will provide the website example shortly.
-
-Typical long-term structure:
-*   `infra/` (this repo)
-    *   CDK stacks, lambdas, platform security
-    *   user extension registration under `infra/user/`
-*   `website/` (separate repo)
-    *   pure HTML/CSS/JS content
-    *   deployed to the `siteBucket`
-
-Why split repos:
-*   Website iteration is fast and disposable.
-*   Infrastructure changes are slow and deliberate.
-*   Your design experiments should not drift the security model.
-
-## Stacks
-
-This app deploys four stacks:
-
-*   **DataStack**
-    *   DynamoDB sessions table (TTL)
-    *   DynamoDB user profile table (stable opaque id)
-    *   Private S3 buckets: site + users
-
-*   **AuthStack**
-    *   Cognito User Pool + Hosted UI custom domain (`auth.<rootDomain>`)
-    *   OAuth code grant with PKCE
-
-*   **ApiStack**
-    *   HTTP API + Lambda Authorizer
-    *   Auth handlers (`/auth/start`, `/auth/callback`, `/auth/logout`)
-    *   Core API (`/api/me`, `/api/theme`)
-    *   User extension loader and registrar
-
-*   **WebStack**
-    *   CloudFront distribution with:
-        *   custom domain and terminating TLS
-        *   Routing traffic to private origins based on path
-        *   private S3 origins via OAC
-        *   API origin with secret origin-verify header
-        *   strict security headers (CSP, HSTS, etc)
-        *   signed-cookie protection for `/app/*` and `/u/*`
-        *   CloudFront Function that rewrites `/u/me/*` → `/u/<opaque>/*` and denies direct opaque paths
-
-## Security boundaries (the guarantees)
-
-### CloudFront gates capability
-
-*   `/app/*` is protected by **CloudFront signed cookies**.
-*   `/u/*` is protected by **CloudFront signed cookies** and is **no-store**.
-
-### Only CloudFront is allowed to call the API
-
-All auth and API lambdas enforce an **origin verify header**. If the request is not coming through CloudFront, it fails.
-
-### Sessions are server-side
-
-*   The browser holds a session id cookie.
-*   The server stores session state in DynamoDB with TTL.
-
-### CSRF is non-optional
-
-Unsafe methods (`POST`, `PUT`, `PATCH`, `DELETE`) require:
-
-*   CSRF cookie (not HttpOnly)
-*   Matching CSRF header
-
-User endpoints cannot bypass this.
-
-### User endpoints are wrapped, not trusted
-
-User handlers are never invoked directly. ApiStack generates a tiny platform-owned entrypoint that always wraps your `business` export with `secureHttp()`.
+Static cookies are bearer grants with their own expiry. Deleting an API session does not immediately revoke copies of already-issued static cookies. Logout clears browser credentials and deletes the API session; failed session deletion returns 503 instead of reporting success. GET /auth/logout remains available for existing website links.
 
 ## Configuration
 
-This project reads configuration from a settings file discovered by `infra/bin/infra-helpers`.
+Copy [settings.example.json](settings.example.json) to **settings.json at the repository root**, then replace the placeholder values. The local settings file is ignored by Git.
 
-Create the settings file and populate values. You must set these requirements inside your AWS account before deployment.
+| Setting | Purpose |
+| --- | --- |
+| projectName / stage | Resource names; defaults to cuddly-fishstick / dev |
+| domain | App DNS hostname, without scheme, port or path |
+| certArnUsEast1 | Existing ACM certificate in us-east-1 covering app and Cognito custom domains |
+| cfPublicKeyId | Existing CloudFront public key used by the trusted key group |
+| cfPrivateKeyParameterArn | Existing SSM SecureString containing the corresponding signing private key |
+| cfCookieDomain | App domain or its parent cookie domain |
+| cfCookiePath | Must be / to cover both protected path families |
+| cfCookieTtlSeconds | Positive integer lifetime; defaults to 3600 |
+| originVerifyHeaderName | Custom header name; defaults to X-Origin-Verify |
+| originVerifyHeaderValueParameterArn | Existing SSM **String** containing the shared origin-verification value |
+| allowedFrameSrc / allowedConnectSrc | Extra HTTPS origins, blob: or data: allowed by those CSP directives |
 
-```json
-{
-  "projectName": "cuddly-fishstick",
-  "stage": "dev",
-  "enableWaf": false,
+Use a cryptographically random origin value (for example, 32 random bytes encoded as base64url), without surrounding whitespace. The Web stack reads it through an SSM parameter-value CloudFormation parameter. It Base64-encodes the resolved value before inserting it into function code, preventing code injection. Base64 is an encoding, not encryption: AWS principals allowed to retrieve distribution configuration or function code can access that value. Do not publish synthesized/deployed secret-bearing configuration.
 
-  "domain": "example.com",
-  "certArnUsEast1": "arn:aws:acm:us-east-1:123456789012:certificate/xxxx",
+The signing private key remains in SSM SecureString and is fetched with decryption by the callback. Raw PEM and JSON containing private_key, privateKey or key are supported. The supplied Lambda policy grants ssm:GetParameter; using a customer-managed KMS key also requires an appropriate kms:Decrypt grant and key policy.
 
-  "cfPublicKeyId": "Kxxxxxxxxxxxx",
-  "cfPrivateKeySecretArn": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:cloudfront/private-key-xxxxx",
+SSM parameters must be in the deployment account/region. No Secrets Manager resource or client is used. The old cfPrivateKeySecretArn field is rejected with a migration message. The previous enableWaf flag has no implementation.
 
-  "cfCookieDomain": ".example.com",
-  "cfCookiePath": "/",
-  "cfCookieTtlSeconds": 3600,
+## DNS and deployment
 
-  "originVerifyHeaderName": "X-Origin-Verify",
-  "originVerifyHeaderValueParameterArn": "arn:aws:ssm:REGION:ACCOUNT:parameter/shared/origin-verify"
-}
+The app requires DNS you control and a validated ACM certificate in us-east-1. Cognito's custom domain is auth.<app-domain>, with a leading www. removed from the app domain. For example, www.example.com uses auth.example.com; app.example.com uses auth.app.example.com.
+
+Before first deployment, make the parent of the Cognito custom domain resolve with an A record. After deployment:
+
+- Point the app domain to WebStack's CloudFrontDomainName output using your provider's appropriate CNAME or apex ALIAS/ANAME mechanism.
+- Point the Cognito custom domain to AuthStack's CognitoCloudFrontDistribution output.
+
+Work from infra/:
+
+```sh
+npm ci
+npm run build
+npm test
+npm run synth
+npx cdk diff --all
+npx cdk deploy --all
 ```
 
-### Notes on the required fields
+The CDK app runs TypeScript directly; build output goes to infra/dist/. Account and region come from the CDK environment. The default landing page is /app/page1.html; the consuming website must provide it or use /auth/start?next=/app/another-page.html.
 
-*   `domain`
-    *   Public app domain served by CloudFront.
-    *   Can be apex (`example.com`) or `www.example.com`.
+Upload website content separately to SiteBucketName. Use DistributionId for any public-asset invalidations. /config/* is public and must not contain credentials.
 
-*  `certArnUsEast1`
-    *   Used by CloudFront and Cognito custom domains.
-    *   Both services require ACM certificates issued in `us-east-1`.
+**Existing deployments must follow [UPGRADING.md](UPGRADING.md) before deploying these fixes.** Bucket-policy ownership requires a preparatory update, and existing unsigned user cookies require a fresh login.
 
+For prod/production stages, buckets, tables and the Cognito pool default to retention on deletion/replacement. Other stage names retain disposable defaults, including automatic bucket cleanup. Direct CDK consumers can explicitly override removalPolicy. No backups, versioning or point-in-time recovery are enabled automatically.
 
-*   `cfPublicKeyId` and `cfPrivateKeySecretArn`
-    *   Used to mint CloudFront signed cookies on login.
-    *   Public key lives in CloudFront Key Groups.
-    *   Private key stays in Secrets Manager.
+## Extending the API
 
-*   `originVerifyHeaderValueParameterArn`
-    *   SSM parameter that holds the secret value CloudFront injects into origin requests.
-    *   Lambdas read this parameter and fail if the header is missing or incorrect.
-
-## DNS and certificates
-
-**This project requires a custom domain.**
-
-### Before your first deploy
-
-*   You need a domain you control.
-*   You need DNS access.
-*   An ACM certificate for your app domain `<rootDomain>` or `www.<rootDomain>` and for the Cognito Hosted UI domain `auth.<rootDomain>`.
-
-**Important:** If your DNS provider supports ALIAS / ANAME / flattening, use it, otherwise, you will need to **avoid the canonical name and use www instead**.
-
-### Practical deployment tip:
-
-Cognito validates the custom domain during deployment. If the domain does not resolve, deployment will fail.
-
-192.0.2.1 is a reserved documentation IP and is safe to use as a temporary target. So, if you don't have an A record, create a temporary placeholder so the domain resolves.
-
-```
-A   example.com   →   192.0.2.1
-```
-
-### After deployment
-
-*   Point your app domain to the CloudFront distribution domain.
-
-#### If your DNS supports apex flattening (ALIAS/ANAME):
-```
-ALIAS/ANAME example.com → dxxxx.cloudfront.net
-```
-#### If your DNS does not support flattening at the apex:
-```
-CNAME www.example.com → dxxxx.cloudfront.net
-(and redirect example.com → www.example.com)
-```
-
-*   Point `auth.<rootDomain>` to the Cognito custom domain target.
-```
-CNAME or ALIAS/ANAME auth.example.com → <cognito-domain-output>
-```
-
-## Extending the API (user extension model)
-
-The platform expects a downstream module that exports:
+Implement register(ctx) in infra/user/index.ts. Create private endpoints through ctx.endpoint.createUserEndpoint() and register them through ctx.api.registerApiRoute(). Business modules export a business function:
 
 ```ts
-export function register(ctx: UserExtensionCtx): void
-```
+import type { SecureHttpBusinessFn } from '../lambda/api/secure-http';
 
-Example:
-
-*   Create endpoints with `ctx.endpoint.createUserEndpoint({...})`
-*   Register routes with `ctx.api.registerApiRoute({...})`
-*   Create public endpoints with `ctx.publicEndpoint.createPublicEndpoint({...})`
-*   Register public routes with `ctx.publicApi.registerPublicApiRoute({...})`
-
-Rules enforced by the platform:
-
-*   Paths must be under `/api/`.
-*   Public paths must be under `/api/public/`.
-*   `/auth/*` is reserved.
-*   Methods are allowlisted.
-*   Required platform environment variables cannot be overridden.
-*   Keys starting with the platform prefix are reserved.
-*   All user endpoints are automatically authenticated.
-*   CSRF is enforced automatically for unsafe methods.
-*   Public endpoints are unauthenticated, read-only (`GET`, `HEAD`, `OPTIONS`), and still enforce CloudFront origin verification.
-
-Your business code stays clean:
-
-```ts
-export const business: SecureHttpBusinessFn = async (ctx, input) => {
-  return {
-    message: "ok",
-    user_sub: ctx.user_sub,
-    received: input.body ?? null,
-  };
-};
-```
-
-Public endpoint example:
-
-```ts
-const publicPingFn = ctx.publicEndpoint.createPublicEndpoint({
-  id: "PublicPing",
-  entryRelativeToUserDir: "public-ping.ts",
-});
-
-ctx.publicApi.registerPublicApiRoute({
-  path: "/api/public/ping",
-  methods: ["GET", "HEAD", "OPTIONS"],
-  fn: publicPingFn,
+export const business: SecureHttpBusinessFn = async (ctx, input) => ({
+  message: 'ok',
+  user_sub: ctx.user_sub,
+  received: input.body ?? null,
 });
 ```
 
-Public handlers export a `PublicHttpBusinessFn`:
+The generated entrypoint runs secureHttp: origin verification, authorizer-context checks, CSRF checks for unsafe methods, JSON parsing and response handling. Unsafe browser requests must include X-CSRF-Token matching the __Host-csrf cookie. Return an object, or use httpOverride(statusCode, body) for an explicit JSON response.
 
-```ts
-export const business: PublicHttpBusinessFn = async () => {
-  return { message: "public ok" };
-};
-```
+Public endpoints use ctx.publicEndpoint.createPublicEndpoint() and ctx.publicApi.registerPublicApiRoute(), with PublicHttpBusinessFn from public-http. Only /api/public/* and GET/HEAD/OPTIONS are allowed. HEAD/OPTIONS return without calling the business function. Public methods do not make side effects inside a GET business function safe.
 
-## Roadmap
+Registrars verify that the supplied function came from the corresponding factory in the current deployment. Required environment variables and the PLATFORM_ namespace are reserved. Deployment code remains trusted CDK code; these checks catch accidental wiring mistakes and do not sandbox hostile extensions.
 
-*   Session TTL 10 minutes and Auto-refresh cookies
-*   Error pages and CloudFront routing for:
-    *   unauthorized
-    *   forbidden
-    *   not found
+ctx.featuresScope is the scope for application resources, and ctx.platform.cognitoUserPoolId exposes the deployment's user pool ID. Grant additional resource access explicitly. The shipped examples are /api/ping, /api/example-auth-call and /api/example-csrf-call; no public example route is enabled by default.
 
-## License
+POST /api/theme validates a small CSS-variable allowlist and writes the authenticated user's theme.css. Its write destination is resolved from the session's user_sub, rather than a client-supplied user ID.
 
-MIT. See `LICENSE`.
+## Validation and operational scope
+
+Tests cover auth callbacks and failures, redirects, identity claims, CSRF/origin helper behavior, session reads, cookie signing/edge verification, policy ownership, retention, config validation and extension wiring. CDK wiring tests mock bundling; run synthesis to also bundle the actual handlers.
+
+Origin-secret lookups in Lambda are cached for at most 60 seconds. Updating SSM alone does not update CloudFront or its edge function. Rotation automation and overlapping old/new keys are not implemented; coordinate a maintenance/deployment transition and fresh login if changing this value. Signing-key rotation separately requires overlapping trusted public keys until old cookies expire.
+
+This template does not configure WAF, roles/tenant authorization, automatic token refresh, custom error-page routing, access-log pipelines or recovery policies. Applications must choose their own requirements for those capabilities.
+
+MIT. See [LICENSE](LICENSE).

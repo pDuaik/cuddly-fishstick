@@ -38,7 +38,7 @@ export async function handler(event: AuthorizerEvent): Promise<SimpleAuthRespons
       new GetCommand({
         TableName: tableName,
         Key: { session_id: sessionId },
-        ConsistentRead: false,
+        ConsistentRead: true,
       }),
     );
 
@@ -48,14 +48,15 @@ export async function handler(event: AuthorizerEvent): Promise<SimpleAuthRespons
     const now = Math.floor(Date.now() / 1000);
     const expiresAt = Number(item.expires_at ?? 0);
 
-    if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+    if (!Number.isFinite(expiresAt) || expiresAt <= now ||
+        typeof item.user_sub !== 'string' || !item.user_sub.trim() || item.user_sub === 'unknown') {
       return { isAuthorized: false };
     }
 
     return {
       isAuthorized: true,
       context: {
-        user_sub: (item.user_sub ?? 'unknown').toString(),
+        user_sub: item.user_sub,
         session_id: sessionId,
       },
     };

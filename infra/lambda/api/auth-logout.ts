@@ -54,7 +54,8 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   // Read session id from cookies (header + cookie list supported)
   const sessionId = getCookie(event, cookieName);
 
-  // Delete server-side session (best effort)
+  // Do not report logout success until server-side revocation succeeds.
+  let deletionFailed = false;
   if (sessionId) {
     try {
       await ddb.send(
@@ -63,15 +64,16 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
           Key: { session_id: sessionId },
         }),
       );
-    } catch {
-      // best effort: ignore
+    } catch (error: any) {
+      deletionFailed = true;
+      console.log('[auth-logout] failed to delete session', { name: error?.name });
     }
   }
 
   const outCookies: string[] = [];
 
   // 1) Clear app session cookie (HttpOnly)
-  outCookies.push(
+  if (!deletionFailed) outCookies.push(
     buildCookie(cookieName, '', {
       path: '/',
       httpOnly: true,
@@ -129,6 +131,16 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   outCookies.push(buildCookie('CloudFront-Key-Pair-Id', '', cfAttrs));
   outCookies.push(buildCookie('CloudFront-Policy', '', cfAttrs));
   outCookies.push(buildCookie('CloudFront-Signature', '', cfAttrs));
+
+  if (deletionFailed) {
+    // Keep the HttpOnly session cookie so a retry can revoke that session.
+    // Clear the other credentials and return an explicit failure, not a
+    // success redirect that conceals a still-valid server-side session.
+    return json(503, { message: 'Logout could not revoke your session. Please retry logout.' }, {
+      cookies: outCookies,
+      headers: { 'retry-after': '1' },
+    });
+  }
 
   // 5) Redirect through Cognito logout to clear Hosted UI session cookies
   const fallbackRedirect = postLogoutRedirect !== 'https://example.invalid/' ? postLogoutRedirect : '/';

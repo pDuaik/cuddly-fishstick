@@ -100,7 +100,6 @@
     "@aws-cdk/aws-elasticloadbalancingv2:networkLoadBalancerWithSecurityGroupByDefault": true,
     "@aws-cdk/aws-ecs-patterns:uniqueTargetGroupId": true,    
     "projectName": "cuddly-fishstick",
-    "stage": "dev",
-    "enableWaf": false
+    "stage": "dev"
   }
 }

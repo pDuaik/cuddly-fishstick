@@ -4,6 +4,9 @@ import { Construct } from 'constructs';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import { bucketPolicyDocument } from './platform-bucket';
+import { userPathFunctionBody } from './user-path-function';
 
 export interface WebStackProps extends cdk.StackProps {
   domain: string; // example.com or www.example.com
@@ -22,9 +25,9 @@ export interface WebStackProps extends cdk.StackProps {
   allowedConnectSrc?: string[];
 }
 
-function ssmDynamicReferenceFromParamArn(paramArn: string, version?: number): string {
+function ssmParameterName(paramArn: string): string {
   // Accepts: arn:aws:ssm:REGION:ACCOUNT:parameter/PATH/NAME
-  // Returns: {{resolve:ssm:/PATH/NAME}} or {{resolve:ssm:/PATH/NAME:VERSION}}
+  // CloudFormation resolves this name through an SSM parameter-value parameter.
   const marker = ':parameter/';
   const idx = paramArn.indexOf(marker);
   if (idx === -1) throw new Error(`Invalid SSM parameter ARN: ${paramArn}`);
@@ -34,9 +37,7 @@ function ssmDynamicReferenceFromParamArn(paramArn: string, version?: number): st
 
   if (!name.startsWith('/')) name = '/' + name;
 
-  return version === undefined
-    ? `{{resolve:ssm:${name}}}`          // latest on stack create/update
-    : `{{resolve:ssm:${name}:${version}}}`;
+  return name;
 }
 
 function validateCspSource(src: string): string {
@@ -167,10 +168,16 @@ export class WebStack extends cdk.Stack {
     });
 
     // -------------------------
-    // Origin verify header (dynamic reference)
+    // Resolve once for both the origin header and safely encoded edge HMAC key.
     // -------------------------
     const originVerifyHeaderName = (props.originVerifyHeaderName || 'X-Origin-Verify').trim() || 'X-Origin-Verify';
-    const originVerifyHeaderValue = ssmDynamicReferenceFromParamArn(props.originVerifyHeaderValueParameterArn);
+    const originVerifyValue = new cdk.CfnParameter(this, 'OriginVerifyValue', {
+      type: 'AWS::SSM::Parameter::Value<String>',
+      default: ssmParameterName(props.originVerifyHeaderValueParameterArn),
+      noEcho: true,
+      description: 'SSM String parameter used for origin verification and user-cookie authentication.',
+    });
+    const originVerifyHeaderValue = originVerifyValue.valueAsString;
 
     // Managed policy IDs
     const cacheOptimizedId = cloudfront.CachePolicy.CACHING_OPTIMIZED.cachePolicyId;
@@ -187,48 +194,14 @@ export class WebStack extends cdk.Stack {
     // and deny direct /u/<opaque>/* (forces callers to use /u/me/*)
     // -------------------------
     const uMeRewriteFn = new cloudfront.Function(this, 'UPathRewriteFn', {
-      comment: 'Rewrite /u/me/* to /u/<__Host-uk>/*; deny direct /u/<opaque>/*',
-      code: cloudfront.FunctionCode.fromInline(`
-function handler(event) {
-  var req = event.request;
-  var uri = req.uri || "/";
-
-  if (uri.indexOf("/u/") !== 0) return req;
-
-  if (uri.indexOf("/u/me/") !== 0) {
-    return {
-      statusCode: 403,
-      statusDescription: "Forbidden",
-      headers: {
-        "cache-control": { value: "no-store" },
-        "content-type": { value: "text/plain; charset=utf-8" }
-      },
-      body: "Forbidden"
-    };
-  }
-
-  var cookies = req.cookies || {};
-  var opaque = (cookies["__Host-uk"] && cookies["__Host-uk"].value) ? cookies["__Host-uk"].value : "";
-
-  if (!opaque) {
-    return {
-      statusCode: 403,
-      statusDescription: "Forbidden",
-      headers: {
-        "cache-control": { value: "no-store" },
-        "content-type": { value: "text/plain; charset=utf-8" }
-      },
-      body: "Forbidden"
-    };
-  }
-
-  var rest = uri.substring("/u/me/".length);
-  req.uri = "/u/" + opaque + "/" + rest;
-  return req;
-}
-
-`.trim()),
-
+      comment: 'Verify signed user cookie, then rewrite /u/me/* to the authenticated prefix',
+      runtime: cloudfront.FunctionRuntime.JS_2_0,
+      code: cloudfront.FunctionCode.fromInline(cdk.Fn.join('', [
+        'var crypto = require("crypto");\nvar secret = Buffer.from("',
+        cdk.Fn.base64(originVerifyValue.valueAsString),
+        '", "base64").toString("utf8").trim();\n',
+        userPathFunctionBody(siteDomain),
+      ])),
     });
 
     // -------------------------
@@ -327,7 +300,7 @@ function handler(event) {
             allowedMethods: ['GET', 'HEAD', 'OPTIONS'],
             cachedMethods: ['GET', 'HEAD', 'OPTIONS'],
             cachePolicyId: cacheDisabledId,
-            responseHeadersPolicyId: baseSecurityPolicy.responseHeadersPolicyId,
+            responseHeadersPolicyId: noStoreSecurityPolicy.responseHeadersPolicyId,
             trustedKeyGroups: [keyGroup.keyGroupId],
             compress: true,
           },
@@ -366,53 +339,34 @@ function handler(event) {
       },
     });
 
-    // -------------------------
-    // Bucket policy for Site bucket (OAC)
-    // -------------------------
-    new s3.CfnBucketPolicy(this, 'SiteBucketPolicy', {
-      bucket: props.siteBucket.bucketName,
-      policyDocument: {
-        Version: '2012-10-17',
-        Statement: [
-          {
-            Sid: 'AllowCloudFrontReadViaOAC',
-            Effect: 'Allow',
-            Principal: { Service: 'cloudfront.amazonaws.com' },
-            Action: 's3:GetObject',
-            Resource: `${props.siteBucket.bucketArn}/*`,
-            Condition: {
-              StringEquals: {
-                'AWS:SourceArn': `arn:aws:cloudfront::${this.account}:distribution/${dist.ref}`,
-              },
-            },
+    // One policy resource per bucket, owned here to avoid a Data -> Web cycle.
+    // Include every statement collected during bucket creation and extension setup.
+    for (const [policyId, bucket] of [
+      ['SiteBucketPolicy', props.siteBucket],
+      ['UsersBucketPolicy', props.usersBucket],
+    ] as const) {
+      const document = bucketPolicyDocument(bucket);
+      document.addStatements(new iam.PolicyStatement({
+        sid: 'AllowCloudFrontReadViaOAC',
+        principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
+        actions: ['s3:GetObject'],
+        resources: [bucket.arnForObjects('*')],
+        conditions: {
+          StringEquals: {
+            'AWS:SourceArn': cdk.Fn.join('', [
+              'arn:', this.partition, ':cloudfront::', this.account, ':distribution/', dist.ref,
+            ]),
           },
-        ],
-      },
-    });
-
-    // -------------------------
-    // Bucket policy for Users bucket (OAC)
-    // -------------------------
-    new s3.CfnBucketPolicy(this, 'UsersBucketPolicy', {
-      bucket: props.usersBucket.bucketName,
-      policyDocument: {
-        Version: '2012-10-17',
-        Statement: [
-          {
-            Sid: 'AllowCloudFrontReadViaOAC',
-            Effect: 'Allow',
-            Principal: { Service: 'cloudfront.amazonaws.com' },
-            Action: 's3:GetObject',
-            Resource: `${props.usersBucket.bucketArn}/*`,
-            Condition: {
-              StringEquals: {
-                'AWS:SourceArn': `arn:aws:cloudfront::${this.account}:distribution/${dist.ref}`,
-              },
-            },
-          },
-        ],
-      },
-    });
+        },
+      }));
+      const policy = new s3.CfnBucketPolicy(this, policyId, {
+        bucket: bucket.bucketName,
+        policyDocument: document,
+      });
+      // Web is removed before Data. Retain the policy so the DataStack cleanup
+      // provider can still empty disposable buckets; persistent buckets keep SSL enforcement.
+      policy.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+    }
 
     // Outputs
     this.distributionId = dist.ref;

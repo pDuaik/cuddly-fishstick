@@ -76,6 +76,86 @@ function mockNodejsFunctionNoBundling() {
 }
 
 describe('ApiStack acceptance', () => {
+  test('private routes use an uncached session authorizer and callback validates the configured issuer', () => {
+    jest.isolateModules(() => {
+      mockNodejsFunctionNoBundling();
+      jest.doMock('../user/index', () => ({
+        register: (ctx: any) => {
+          const fn = ctx.endpoint.createUserEndpoint({ id: 'PrivatePing', entryRelativeToUserDir: 'ping.ts' });
+          ctx.api.registerApiRoute({ path: '/api/private-ping', methods: ['GET'], fn });
+        },
+      }));
+      const { ApiStack } = require('../lib/api-stack');
+      const app = new cdk.App();
+      const env = { account: '123456789012', region: 'eu-west-2' };
+      const stack = new cdk.Stack(app, 'Root', { env });
+      const api = new ApiStack(stack, 'Api', { ...baseProps(stack), env });
+      const template = Template.fromStack(api);
+      template.hasResourceProperties('AWS::ApiGatewayV2::Authorizer', { AuthorizerResultTtlInSeconds: 0 });
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'GET /api/private-ping', AuthorizationType: 'CUSTOM' });
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: { Variables: { COGNITO_ISSUER: {
+          'Fn::Join': ['', ['https://cognito-idp.eu-west-2.', { Ref: 'AWS::URLSuffix' }, '/user-pool-id']],
+        } } },
+      });
+    });
+  });
+
+  test.each(['private', 'public'])('%s registrar rejects a raw function without the platform wrapper', kind => {
+    jest.isolateModules(() => {
+      mockNodejsFunctionNoBundling();
+      jest.doMock('../user/index', () => ({
+        register: (ctx: any) => {
+          const { NodejsFunction } = require('aws-cdk-lib/aws-lambda-nodejs');
+          const fn = new NodejsFunction(ctx.featuresScope, 'Raw', {});
+          if (kind === 'private') ctx.api.registerApiRoute({ path: '/api/raw', methods: ['POST'], fn });
+          else ctx.publicApi.registerPublicApiRoute({ path: '/api/public/raw', methods: ['GET'], fn });
+        },
+      }));
+      const { ApiStack } = require('../lib/api-stack');
+      const app = new cdk.App();
+      const stack = new cdk.Stack(app, 'Root');
+      expect(() => new ApiStack(stack, 'Api', baseProps(stack))).toThrow(/fn must come from this platform/);
+    });
+  });
+
+  test.each(['private', 'public'])('%s registrar rejects an endpoint from the other factory', kind => {
+    jest.isolateModules(() => {
+      mockNodejsFunctionNoBundling();
+      jest.doMock('../user/index', () => ({
+        register: (ctx: any) => {
+          const input = { id: 'WrongFactory', entryRelativeToUserDir: 'ping.ts' };
+          if (kind === 'private') {
+            const fn = ctx.publicEndpoint.createPublicEndpoint(input);
+            ctx.api.registerApiRoute({ path: '/api/wrong', methods: ['GET'], fn });
+          } else {
+            const fn = ctx.endpoint.createUserEndpoint(input);
+            ctx.publicApi.registerPublicApiRoute({ path: '/api/public/wrong', methods: ['GET'], fn });
+          }
+        },
+      }));
+      const { ApiStack } = require('../lib/api-stack');
+      const app = new cdk.App();
+      const stack = new cdk.Stack(app, 'Root');
+      expect(() => new ApiStack(stack, 'Api', baseProps(stack))).toThrow(/fn must come from this platform/);
+    });
+  });
+
+  test('endpoint factory rejects platform environment overrides', () => {
+    jest.isolateModules(() => {
+      mockNodejsFunctionNoBundling();
+      jest.doMock('../user/index', () => ({
+        register: (ctx: any) => ctx.endpoint.createUserEndpoint({
+          id: 'BadEnv', entryRelativeToUserDir: 'ping.ts', environment: { PLATFORM_CSRF_HEADER_NAME: 'Disabled' },
+        }),
+      }));
+      const { ApiStack } = require('../lib/api-stack');
+      const app = new cdk.App();
+      const stack = new cdk.Stack(app, 'Root');
+      expect(() => new ApiStack(stack, 'Api', baseProps(stack))).toThrow(/cannot override required var/);
+    });
+  });
+
   test('calls user.register(ctx)', () => {
     jest.isolateModules(() => {
       mockNodejsFunctionNoBundling();

@@ -3,7 +3,8 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import type { AppConfig } from './config';
+import { AppConfig, defaultRemovalPolicy } from './config';
+import { PlatformBucket, prepareBucketPolicyMigration } from './platform-bucket';
 
 export interface DataStackProps extends cdk.StackProps {
   config: AppConfig;
@@ -21,7 +22,8 @@ export class DataStack extends cdk.Stack {
     super(scope, id, props);
 
     const { projectName, stage } = props.config;
-    const removalPolicy = props.removalPolicy ?? cdk.RemovalPolicy.DESTROY;
+    const removalPolicy = props.removalPolicy ?? defaultRemovalPolicy(stage);
+    const Bucket = prepareBucketPolicyMigration(this) ? s3.Bucket : PlatformBucket;
 
     // -------------------------
     // DynamoDB: sessions (ephemeral, TTL)
@@ -48,7 +50,7 @@ export class DataStack extends cdk.Stack {
     // -------------------------
     // S3: private site bucket (CloudFront will be granted access later via OAC)
     // -------------------------
-    this.siteBucket = new s3.Bucket(this, 'SiteBucket', {
+    this.siteBucket = new Bucket(this, 'SiteBucket', {
       // Intentionally no bucketName: let CloudFormation ensure global uniqueness
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
@@ -64,7 +66,7 @@ export class DataStack extends cdk.Stack {
     // S3: private users bucket (per-user runtime/theme files under /u/*)
     // CloudFront will be granted access later via OAC (separate origin/behavior).
     // -------------------------
-    this.usersBucket = new s3.Bucket(this, 'UsersBucket', {
+    this.usersBucket = new Bucket(this, 'UsersBucket', {
       // Intentionally no bucketName: let CloudFormation ensure global uniqueness
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
@@ -74,6 +76,13 @@ export class DataStack extends cdk.Stack {
       removalPolicy,
       autoDeleteObjects: removalPolicy === cdk.RemovalPolicy.DESTROY,
     });
+
+    // Persist Retain in a preparatory update before removing duplicate policies
+    // from an existing installation. New installations use Web-owned policies.
+    if (prepareBucketPolicyMigration(this)) {
+      this.siteBucket.policy?.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+      this.usersBucket.policy?.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+    }
 
     // -------------------------
     // Outputs

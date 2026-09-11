@@ -4,7 +4,7 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { createHash, randomBytes } from 'crypto';
 
-import { enforceOriginVerify, requireEnv, env, buildCookie, json } from './helpers';
+import { enforceOriginVerify, requireEnv, env, buildCookie, json, safePostLoginRedirect } from './helpers';
 
 function b64url(buf: Buffer): string {
   // Node 22 supports base64url, but we keep it explicit and portable.
@@ -26,21 +26,6 @@ function pkceChallenge(verifier: string): string {
   return b64url(digest);
 }
 
-function safeNextPath(raw: string | undefined, fallback: string): string {
-  // Allow only relative paths like "/app/page1.html".
-  // Reject anything that could become an absolute URL (//, http:, https:, etc).
-  if (!raw) return fallback;
-
-  const v = raw.trim();
-  if (!v.startsWith('/')) return fallback;
-  if (v.startsWith('//')) return fallback;
-
-  const lowered = v.toLowerCase();
-  if (lowered.includes('://')) return fallback;
-
-  return v;
-}
-
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const ov = await enforceOriginVerify(event);
   if (!ov.ok) return json(ov.statusCode, { message: ov.message });
@@ -52,7 +37,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const defaultPostLogin = env('POST_LOGIN_REDIRECT', '/app/page1.html') || '/app/page1.html';
 
   const qs = (event.queryStringParameters ?? {}) as Record<string, string | undefined>;
-  const nextPath = safeNextPath(qs.next, defaultPostLogin);
+  const nextPath = safePostLoginRedirect(qs.next ?? '', defaultPostLogin, new URL(redirectUri).host);
 
   // cookie names (keep template-consistent)
   const stateCookieName = env('OAUTH_STATE_COOKIE_NAME', 'oauth_state') || 'oauth_state';
